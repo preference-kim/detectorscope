@@ -51,36 +51,28 @@ def _get_k_most_dense_features(
 def run_validation_experiment(
     validator: FeatureDescriptionValidator,
     feature_indices: list[int],
-    generate_alternatives: bool,
+    use_neuronpedia_descriptions: bool,
     num_test_examples: int | None,
 ) -> Iterator[dict[str, Any]]:
   """Computes corr on old and new description for each top_k feature."""
   for i in tqdm.tqdm(feature_indices):
-    explanation = utils.get_explanations_for_sae_feature(i)
-    corr, num_examples = validator.validate_feature_description(
-        i, explanation, num_test_examples
-    )
-
-    record = {
-        "feature_index": i,
-        "num_examples": num_examples,
-        "description": explanation,
-        "correlation": corr,
-    }
-
-    if generate_alternatives:
-      new_description = validator.generate_new_autointerp_description(
+    if use_neuronpedia_descriptions:
+      description = {"terse": utils.get_explanations_for_sae_feature(i)}
+    else:
+      description = validator.generate_new_autointerp_description(
           i, validator.n_quantiles * 2
       )
-      new_corr = validator.validate_feature_description(
-          i, new_description["terse"], num_test_examples
-      )
-      record |= {
-          "new_description": new_description,
-          "new_correlation": new_corr,
-      }
 
-    yield record
+    corr, num_examples = validator.validate_feature_description(
+        i, description["terse"], num_test_examples
+    )
+
+    yield {
+        "feature_index": i,
+        "num_examples": num_examples,
+        "description": description,
+        "correlation": corr,
+    }
 
 
 def run_validation_experiment_batch(
@@ -154,9 +146,9 @@ if __name__ == "__main__":
       help="Num. features to select from densest (when no feature_list)",
   )
   parser.add_argument(
-      "--generate_alternatives",
+      "--use_neuronpedia_descriptions",
       action="store_true",
-      help="If true, generate new descriptions and validate them",
+      help="If true, query feature explanations from neuronpedia",
   )
   parser.add_argument(
       "-t",
@@ -229,6 +221,19 @@ if __name__ == "__main__":
       help="If true, create a gemini batch API request",
   )
   parser.add_argument(
+      "--use_all_active_features",
+      action="store_true",
+      help="If true, evaluate all SAE features that are active on the dataset",
+  )
+  parser.add_argument(
+      "-m",
+      "--model_name",
+      type=str,
+      default="gemini-2.5-flash",
+      choices=["gemini-2.5-flash", "gemini-2.5-pro"],
+      help="LLM to use for validating features and generating descriptions",
+  )
+  parser.add_argument(
       "-o",
       "--output_file",
       type=str,
@@ -258,6 +263,7 @@ if __name__ == "__main__":
       "n_quantiles": args.n_quantiles,
       "use_snippets": args.use_snippets,
       "group_size": args.group_size,
+      "model_name": args.model_name
   }
 
   description_validator = FeatureDescriptionValidator(
@@ -269,6 +275,12 @@ if __name__ == "__main__":
       if not args.feature_list
       else args.feature_list
   )
+
+  if args.use_all_active_features:
+    feature_ids = [
+        i for i, density in enumerate(cache.get_feature_density())
+        if density >= args.num_test_examples
+    ]
 
   if args.use_gemini_batch_api:
     run_validation_experiment_batch(
@@ -283,7 +295,7 @@ if __name__ == "__main__":
       for output_record in run_validation_experiment(
           description_validator,
           feature_ids,
-          args.generate_alternatives,
+          args.use_neuronpedia_descriptions,
           args.num_test_examples,
       ):
         json_line = json.dumps(output_record)

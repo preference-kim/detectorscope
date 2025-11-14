@@ -136,11 +136,15 @@ class FeatureDescriptionValidator:
       model_name: str = "gemini-2.5-pro",
       use_snippets: bool = True,
       group_size: int = 5,
+      text_col: str = "review",
+      activation_col: str = "sae_activation",
   ):
     self.data = dataset
     self.cache = activation_cache
     self.gemini_generator = GeminiGenerator(model_name)
     self.extractor = sae_extractor
+    self.text_col = text_col
+    self.activation_col = activation_col
 
     self.deterministic_group_sampling = True
     self.group_sample_seed = 42
@@ -159,6 +163,10 @@ class FeatureDescriptionValidator:
     self.group_size = (
         group_size if self.validation_method != "pairwise" else 2
     )
+
+    # Add activation column to the dataset if it is not present
+    if self.activation_col not in self.data.column_names:
+      self.data = utils.add_values_col(self.data, self.activation_col)
 
     # TODO(liamdugan): Make this relative import to __file__ location
     #                  or take it in as a CLI argument
@@ -304,13 +312,13 @@ class FeatureDescriptionValidator:
     """Retrieve document and add feature activation highlights."""
     # Get the tokens of the document
     tokens = self.extractor.model.to_str_tokens(
-        self.data[doc_id]["response"],
+        self.data[doc_id][self.text_col],
         prepend_bos=self.extractor.prepend_bos,
     )
 
     # Get cached SAE activations of all features for the particular document
     activations = torch.sparse_csr_tensor(
-        **self.data[doc_id]["hook_sae_acts_post"]
+        **self.data[doc_id][self.activation_col]
     )
 
     # Extract the activations of the particular feature on the document
@@ -557,7 +565,7 @@ class FeatureDescriptionValidator:
     prompts = [
         self._format_validation_prompt(
             g, feature_index, feature_description, max_activation
-        )
+        ).strip()
         for g in groups
     ]
 
@@ -616,7 +624,12 @@ class FeatureDescriptionValidator:
     quantile_str = f"{quantile+1}/{self.n_quantiles}:"
     return QUANTILE_DESCRIPTIONS["middle"] + quantile_str
 
-  def _format_generation_prompt(self, group: list[tuple[int, int]]) -> str:
+  def _format_generation_prompt(
+      self,
+      feature_index: int,
+      group: list[tuple[int, int]],
+      max_activation: float
+  ) -> str:
     """Formats the prompt for generating feature descriptions.
 
     This method takes a group of documents, grouped by quantile, and formats
@@ -625,11 +638,15 @@ class FeatureDescriptionValidator:
     generate different types of explanations (terse, keywords, long).
 
     Args:
+      feature_index: the index of the feature to generate description for
       group: A list of tuples, where each contains `(quantile_id, doc_id)`.
+      max_activation: the maximum activation of that feature on the dataset
 
     Returns:
       A string containing the formatted generation prompt.
     """
+    threshold = max_activation * HIGHLIGHT_THRESHOLD
+
     # Convert group to dict: quantile_id -> list of docs
     quantile_dict = collections.defaultdict(list)
     for key, value in group:
@@ -640,7 +657,7 @@ class FeatureDescriptionValidator:
     for quantile, doc_ids in quantile_dict.items():
       example_lines.append(self._get_quantile_desc(quantile) + "\n")
       for i, doc_id in enumerate(doc_ids):
-        example = self.data[doc_id]["response"]
+        example = self._apply_highlights(doc_id, feature_index, threshold)
         example_lines.append(f"{i+1}. {repr(example)}\n")
       example_lines.append("\n")
 
@@ -651,7 +668,7 @@ class FeatureDescriptionValidator:
     explanation_types_structure_str = "\n" + "\n".join(
         [f"<{k}>...</{k}>" for k in EXPLANATION_TYPES.keys()]
     )
-    model_prefix_str = f"<{EXPLANATION_TYPES.keys()[0]}>"
+    model_prefix_str = f"<{list(EXPLANATION_TYPES.keys())[0]}>"
 
     # Return the completed generation prompt
     return self.generation_prompt_template.format(
@@ -660,6 +677,7 @@ class FeatureDescriptionValidator:
         explanation_types_structure=explanation_types_structure_str,
         examples="".join(example_lines),
         model_prefix=model_prefix_str,
+        highlight_explanation=self.highlight_explanation
     )
 
   def _parse_tagged_text(self, text: str) -> dict[str, str]:
@@ -673,6 +691,7 @@ class FeatureDescriptionValidator:
     """Generate a new description for the given feature_index."""
     # Get the dataset-wide distribution of max_activations for the feature
     feats = dict(self.cache.get_max_activations(feature_index))
+    max_activation = max(feats.values())
 
     # Bin documents into quantiles
     quantile_dict = self._get_quantiles(feats)
@@ -689,11 +708,13 @@ class FeatureDescriptionValidator:
 
     # Create the generation prompt from the sampled documents
     group = list(itertools.chain.from_iterable(groups))
-    prompt = self._format_generation_prompt(group)
+    prompt = self._format_generation_prompt(
+        feature_index, group, max_activation
+    )
 
     # Generate feature description using gemini
     response = self.gemini_generator.generate(
-        [prompt], self.generation_config
+        [prompt.strip()], self.generation_config
     )
 
     # Return the parsed description

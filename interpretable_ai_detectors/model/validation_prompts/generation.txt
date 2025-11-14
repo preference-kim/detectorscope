@@ -10,6 +10,7 @@ There are a range of possible hypotheses, for example the neuron could activate 
 
 {grouping_explanation} Based on this, you will be asked to explain what this neuron is activating on.
 
+{highlight_explanation}
 You'll be asked for several different kinds of explanations, which you should enclose in tags like <explanation_type>...</explanation_type> (remember to close all open tags!).
 In all cases, your explanation should be maximally specific and but still capture all the relevant information.
 

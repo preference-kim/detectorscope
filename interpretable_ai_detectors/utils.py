@@ -18,11 +18,26 @@
 import itertools
 import json
 import random
-from typing import Any
+from typing import Any, Iterator
 
+import datasets
 import matplotlib.pyplot as plt
 import requests
 import torch
+
+CSR_KEYS = ["crow_indices", "col_indices", "values", "size"]
+
+
+def add_values_col(ds: datasets.Dataset, values_col: str) -> datasets.Dataset:
+  if not all([key in ds.column_names for key in CSR_KEYS]):
+    raise ValueError("Not all CSR columns are present")
+
+  def iterate_slice(ds_slice: datasets.Dataset) -> Iterator[dict[str, Any]]:
+    """Iterate over a slice of the dataset and only return the CSR keys."""
+    for i in range(len(ds_slice[CSR_KEYS[0]])):
+      yield {col: ds_slice[col][i] for col in CSR_KEYS}
+
+  return ds.with_transform(lambda x: {values_col: list(iterate_slice(x))} | x)
 
 
 def get_distinct_colors_mpl(n: int) -> list[tuple[int, int, int]]:
