@@ -1,0 +1,30 @@
+We're studying neurons in a neural network. Each neuron activates on some particular word or concept in a short document.
+Each neuron is highly sparse, and will only activate on a small number of documents (and possibly a small number of words within each document).
+There are a range of possible hypotheses, for example the neuron could activate on:
+
+- specific syntactic features, e.g. punctuation like ")", ".", ":" or markdown like "**", or code syntax
+- a specific set of words or phrases, e.g. "protest" or "protesters" (or other-language variants)
+- specific words in particular contexts, e.g. "security" when it's used in the context of the bigram "social security"
+- specific situations contexts, e.g. dialogue in online chat forums
+- broader concepts, e.g. discussion of political statistics
+
+{grouping_explanation} Based on this, you will be asked to explain what this neuron is activating on.
+
+You'll be asked for several different kinds of explanations, which you should enclose in tags like <explanation_type>...</explanation_type> (remember to close all open tags!).
+In all cases, your explanation should be maximally specific and but still capture all the relevant information.
+
+The different types of explanations you should provide are:
+
+{explanation_types}
+
+So your final answer should look like: {explanation_types_structure}
+
+Some final instructions:
+- Try to be specific in your explanations, although not so specific that you exclude most/all of the examples from matching your explanation.
+- Pay attention to things like the capitalization and punctuation of the activating words or concepts, only if that seems relevant (e.g. if the activating words were all proper nouns).
+- We're dealing with sentences that have been tokenized, so the neuron might only be active on tokens from a tokenized word rather than full words or phrases.
+- Some neurons are token-level (i.e. activating on just a few specific words or very short phrases), some are concept-level (activating on most or all words in a sentence, if that sentence fits a particular class). In your long explanations, make sure you take this into account.
+
+The activating documents are given below.
+
+{examples}

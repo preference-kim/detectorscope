@@ -1,0 +1,11 @@
+We're studying neurons in a neural network. Each neuron activates on some particular word or concept in a short document.
+You will be given a short explanation of what this neuron activates for, and then be shown {group_size} example sequences.
+{highlight_explanation}You will have to return a comma-separated list of indices from 1 to {group_size} indicating your ranking of the examples, with the document you think has the lowest activation strength first, and the highest-activating document last.
+You should include nothing else in your response other than a list of comma-separated numbers, e.g. '1, 3, 7, ...'.
+Make sure not to include any reasoning or other text, just the plain response.
+
+Here is the explanation for what the neuron should activate on: **{explanation}**.
+
+Here are the examples:
+
+{examples}
