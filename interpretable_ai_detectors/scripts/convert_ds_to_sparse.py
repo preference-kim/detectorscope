@@ -102,7 +102,6 @@ if __name__ == "__main__":
       "-d",
       "--data_path",
       type=str,
-      default="./activations/sae_activations_10k",
       help="Path to the dataset",
   )
   parser.add_argument(

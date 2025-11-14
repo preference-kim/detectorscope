@@ -26,7 +26,11 @@ import string
 from interpretable_ai_detectors import utils
 from interpretable_ai_detectors.model.detector import Detector
 from interpretable_ai_detectors.model.gemini import GeminiGenerator
+from interpretable_ai_detectors.model.hf_detector import HFDetector
+from interpretable_ai_detectors.model.hf_extractor import HFExtractor
 from interpretable_ai_detectors.model.sae_extractor import SAEExtractor
+from interpretable_ai_detectors.sae.models.jumprelu_sae import JumpReLUSAE
+import pandas as pd
 import rich
 import torch
 
@@ -45,12 +49,17 @@ prompt_template = string.Template(
 
 
 def _format_top_k_features(
-    features: torch.Tensor, top_k: int = 5, ai_name: str = "GPT4"
+    features: torch.Tensor, df: pd.DataFrame = None, top_k: int = 5
 ) -> list[str]:
   """Formats top K features for use in generated report."""
   lines = []
-  for _, weight, desc in utils.get_top_k_explanations(features, top_k):
-    polarity = "Human" if weight < 0 else ai_name
+  for i, weight in utils.get_top_k_activations(features, top_k):
+    desc = (
+        utils.get_description(df, i)
+        if df is not None
+        else utils.get_explanations_for_sae_feature(i)
+    )
+    polarity = "Human" if weight < 0 else "AI"
     lines.append(f"{abs(weight):.4f} ({polarity}) -- {desc}")
   return lines
 
@@ -60,13 +69,14 @@ def generate_report(
     example: str,
     importances: torch.Tensor,
     pred: torch.Tensor,
-    ai_name: str = "GPT4",
+    df: pd.DataFrame,
+    ai_name: str = "AI",
 ) -> str:
   """Generate an interpretable detector report using the given importances."""
   pred = torch.sigmoid(pred).item()
   model_str = "a human" if pred < 0.5 else ai_name
   likelihood_str = f"{(1.0 - pred):.2%}" if pred < 0.5 else f"{pred:.2%}"
-  features_str = "\n".join(_format_top_k_features(importances))
+  features_str = "\n".join(_format_top_k_features(importances, df))
 
   prompt = prompt_template.substitute(
       text=example,
@@ -89,21 +99,57 @@ if __name__ == "__main__":
       help="Path to the detector's .pth file",
   )
   parser.add_argument(
+      "-s",
+      "--sae_path",
+      type=str,
+      default="",
+      help="Path to the trained sae to use for W_dec",
+  )
+  parser.add_argument(
+      "-f",
+      "--features_path",
+      type=str,
+      default="",
+      help="Path to the csv containing feature explanations",
+  )
+  parser.add_argument(
+      "-t",
+      "--target_model",
+      type=str,
+      default="gpt4o",
+      help="The name of the target AI model to detect",
+  )
+  parser.add_argument(
+      "--use_huggingface",
+      action="store_true",
+      help="If true, use huggingface extractor and detector",
+  )
+  parser.add_argument(
       "--use_sae",
       action="store_true",
       help="Use sae activations as detector input instead of residual stream",
   )
   args = parser.parse_args()
 
-  hook_id = "hook_sae_acts_post" if args.use_sae else "hook_sae_input"
-
   generator = GeminiGenerator()
-  extractor = SAEExtractor()
-  detector = Detector(args.detector_path, use_sae_features=args.use_sae)
   detector_kwargs = {}
 
-  if not args.use_sae:
-    detector_kwargs["W_dec"] = extractor.sae.W_dec.cpu()
+  feature_df = None
+  if args.use_huggingface:
+    hook_id = "norm_input"
+    extractor = HFExtractor(
+        model_path=args.detector_path, default_hooks=["norm"]
+    )
+    detector = HFDetector(args.detector_path, use_sae_features=args.use_sae)
+    sae = JumpReLUSAE.from_state_dict(args.sae_path)
+    detector_kwargs["w_dec"] = sae.W_dec.cpu()
+    feature_df = pd.read_csv(args.features_path)
+  else:
+    hook_id = "hook_sae_acts_post" if args.use_sae else "hook_sae_input"
+    extractor = SAEExtractor()
+    detector = Detector(args.detector_path, use_sae_features=args.use_sae)
+    if not args.use_sae:
+      detector_kwargs["w_dec"] = extractor.sae.W_dec.cpu()
 
   while True:
     text = input("Input Text: ")
@@ -121,11 +167,13 @@ if __name__ == "__main__":
 
     # Print the top 5 most important SAE features for the input
     utils.print_prediction(prediction)
-    utils.print_top_k_importance_scores(scores, top_k=5)
+    utils.print_top_k_importance_scores(scores, feature_df, top_k=5)
 
     # Generate the final report
     print("Generating Report... ")
-    report = generate_report(generator, text, scores, prediction)
+    report = generate_report(
+        generator, text, scores, prediction, feature_df, args.target_model
+    )
 
     # Print out the report
     rich.print(rich.panel.Panel(report))

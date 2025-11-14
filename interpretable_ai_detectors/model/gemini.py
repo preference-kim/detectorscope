@@ -76,7 +76,7 @@ class GeminiGenerator:
           retries = 0
           break
 
-        except errors.ClientError as e:
+        except (errors.ClientError, errors.ServerError) as e:
           # On failure, print error and try again
           print(f"Generation Error: {e}")
           retries = retries + 1

@@ -81,7 +81,6 @@ if __name__ == "__main__":
       "-d",
       "--data_path",
       type=str,
-      default="imone/OpenOrca_FLAN",
       help="Path to the dataset",
   )
   parser.add_argument(
@@ -134,7 +133,6 @@ if __name__ == "__main__":
       "-o",
       "--output_path",
       type=str,
-      default="./activations/pre_activations_all",
       help="The path to the output to save the activations",
   )
   args = parser.parse_args()

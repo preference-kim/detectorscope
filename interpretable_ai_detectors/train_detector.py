@@ -128,7 +128,6 @@ if __name__ == "__main__":
       "-d",
       "--data_path",
       type=str,
-      default="/home/liamdugan_google_com/sae_activations_all",
       help="Path to the dataset",
   )
   parser.add_argument(
@@ -169,14 +168,12 @@ if __name__ == "__main__":
       "-s",
       "--tensorboard_dir",
       type=str,
-      default="tensorboard/logreg_train",
       help="Parent directory to write tensorboard logs to",
   )
   parser.add_argument(
       "-m",
       "--model_out_prefix",
       type=str,
-      default="detectors/logreg",
       help="Name for output model",
   )
   args = parser.parse_args()

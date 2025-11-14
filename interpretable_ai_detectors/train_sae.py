@@ -576,7 +576,6 @@ if __name__ == "__main__":
       "-t",
       "--tensorboard_dir",
       type=str,
-      default="./tensorboard/sae_indep_search",
       help="Directory to save tensorboard plots",
   )
   parser.add_argument(

@@ -56,12 +56,14 @@ def run_validation_experiment(
 ) -> Iterator[dict[str, Any]]:
   """Computes corr on old and new description for each top_k feature."""
   for i in tqdm.tqdm(feature_indices):
+    description = {}
     if use_neuronpedia_descriptions:
       description = {"terse": utils.get_explanations_for_sae_feature(i)}
     else:
-      description = validator.generate_new_autointerp_description(
-          i, validator.n_quantiles * 2
-      )
+      while "terse" not in description:
+        description = validator.generate_new_autointerp_description(
+            i, validator.n_quantiles * 2
+        )
 
     corr, num_examples = validator.validate_feature_description(
         i, description["terse"], num_test_examples
@@ -128,7 +130,6 @@ if __name__ == "__main__":
       "-d",
       "--data_path",
       type=str,
-      default="./activations/all_activations_10k_csr",
       help="Path to the dataset",
   )
   parser.add_argument(

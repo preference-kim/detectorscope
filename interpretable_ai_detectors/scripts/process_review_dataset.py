@@ -191,14 +191,12 @@ if __name__ == "__main__":
       "-d",
       "--data_path",
       type=str,
-      default="./detector-scope/data/AI-Peer-Review-Detection-Benchmark",
       help="Location of the raw dataset files",
   )
   parser.add_argument(
       "-o",
       "--output_path",
       type=str,
-      default="./data/PRDB",
       help="Output path to save the dataset",
   )
   args = parser.parse_args()

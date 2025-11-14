@@ -32,7 +32,6 @@ if __name__ == "__main__":
       "-o",
       "--output_path",
       type=str,
-      default="./activations/pre_activations_all",
       help="The path to the location of the combined shards",
   )
   args = parser.parse_args()

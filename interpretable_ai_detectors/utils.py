@@ -22,8 +22,10 @@ from typing import Any, Iterator
 
 import datasets
 import matplotlib.pyplot as plt
+import pandas as pd
 import requests
 import torch
+
 
 CSR_KEYS = ["crow_indices", "col_indices", "values", "size"]
 
@@ -200,13 +202,12 @@ def get_sae_feature_density(feature_index: int) -> float:
   return feature_data["frac_nonzero"]
 
 
-def get_top_k_explanations(activations: torch.Tensor, top_k: int = 5):
+def get_top_k_activations(activations: torch.Tensor, top_k: int = 5):
   """Get explanations for the top k activations. Expects [1, n] or [n, 1]."""
   activations = torch.flatten(activations)
   _, top_k_indices = torch.topk(torch.abs(activations), k=top_k)
   for i in top_k_indices:
-    desc = get_explanations_for_sae_feature(i)
-    yield (i, activations[i].item(), desc)
+    yield (i.item(), activations[i].item())
 
 
 def print_prediction(prediction: torch.Tensor, model: str = "GPT4"):
@@ -218,17 +219,37 @@ def print_prediction(prediction: torch.Tensor, model: str = "GPT4"):
   print("-" * 40)
 
 
-def print_top_k_sae_activations(activations: torch.Tensor, top_k: int = 5):
+def get_description(df: pd.DataFrame, feature_index: int) -> str:
+  """Finds the description for a given feature_index."""
+  matches = df.loc[
+      df["feature_index"] == feature_index, "terse_description"
+  ].sort_index()
+  return next(iter(matches), "[[ No Description ]]")
+
+
+def print_top_k_sae_activations(
+    activations: torch.Tensor, df: pd.DataFrame = None, top_k: int = 5
+):
   print("Top K SAE Activations:")
-  for i, weight, desc in get_top_k_explanations(activations, top_k):
+  for i, weight in get_top_k_activations(activations, top_k):
+    if df is not None:
+      desc = get_description(df, i)
+    else:
+      desc = get_explanations_for_sae_feature(i)
     print(f"{i}: {weight:.4f} -- {desc}")
   print("-" * 40)
 
 
-def print_top_k_importance_scores(scores, top_k: int = 5, model: str = "GPT4"):
+def print_top_k_importance_scores(
+    scores: torch.Tensor, df: pd.DataFrame = None, top_k: int = 5
+):
   print("Top K Detector Weights:")
-  for i, weight, desc in get_top_k_explanations(scores, top_k):
-    polarity = "Human" if weight < 0 else model
+  for i, weight in get_top_k_activations(scores, top_k):
+    if df is not None:
+      desc = get_description(df, i)
+    else:
+      desc = get_explanations_for_sae_feature(i)
+    polarity = "Human" if weight < 0 else "AI"
     print(f"{i}: {weight:.4f} ({polarity}) -- {desc}")
   print("-" * 40)
 

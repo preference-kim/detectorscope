@@ -277,3 +277,13 @@ class JumpReLUSAE(nn.Module):
         }
     )
     return model
+
+  @classmethod
+  def from_state_dict(cls, state_dict_path: str):
+    state_dict = torch.load(state_dict_path)
+    model = cls(
+        d_input=state_dict["W_enc"].shape[0],
+        d_hidden=state_dict["W_enc"].shape[1],
+    )
+    model.load_state_dict(state_dict)
+    return model
