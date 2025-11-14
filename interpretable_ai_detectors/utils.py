@@ -20,8 +20,87 @@ import json
 import random
 from typing import Any
 
+import matplotlib.pyplot as plt
 import requests
 import torch
+
+
+def get_distinct_colors_mpl(n: int) -> list[tuple[int, int, int]]:
+  """Gets N distinct colors from the 'hsv' colormap in Matplotlib.
+
+  Args:
+      n (int): The number of colors to generate.
+
+  Returns:
+      A list of N tuples, where each tuple is an (R, G, B) color
+      with integer values from 0 to 255.
+  """
+  # Get N colors from the hsv colormap
+  # cmap(i) returns (R, G, B, A) in the range [0.0, 1.0]
+  cmap = plt.get_cmap("hsv", n)
+  colors_rgba = [cmap(i) for i in range(n)]
+
+  # Convert from [0.0, 1.0] to [0, 255] and ignore the alpha channel
+  colors_rgb_255 = []
+  for color in colors_rgba:
+    rgb_tuple = tuple(int(c * 255) for c in color[:3])
+    colors_rgb_255.append(rgb_tuple)
+
+  return colors_rgb_255
+
+
+def visualize_multi_feature_saliency(
+    tokens: list[str], scores: torch.Tensor, feature_id: list[int]
+) -> str:
+  """Generates HTML for a colored token saliency heatmap with multiple features.
+
+  Args:
+      tokens (list): List of token strings.
+      scores (torch.Tensor): 2D tensor of activation scores [seq_len, N].
+      feature_id (list): The list of IDs of features (len N)
+
+  Returns:
+      str: An HTML string representing the saliency heatmap.
+  """
+  # normalize by each feature's maximum
+  normalized_scores = scores / scores.max(dim=0).values
+
+  # Get top feature for each token (for coloring)
+  best_feature = torch.argmax(normalized_scores, dim=1)
+
+  # Get max scores for each feature
+  max_activations = normalized_scores.max(dim=1).values
+
+  # Get distinct colors
+  colors = get_distinct_colors_mpl(len(feature_id))
+
+  html_parts = [
+      f"<h3 style='color: rgba({color[0]}, {color[1]}, {color[2]},"
+      f" 1.0);'>Feature #{feat}</h3>"
+      for feat, color in zip(feature_id, colors)
+  ]
+  container_style = (
+      "font-family: monospace; line-height: 2.0; padding: 10px; "
+      "border: 1px solid #ddd; border-radius: 5px; background: #f9f9f9; "
+      "display: flex; flex-wrap: wrap; gap: 4px;"
+  )
+  html_parts.append(f"<div style='{container_style}'>")
+
+  for token, score, feature_index in zip(tokens, max_activations, best_feature):
+    token_html = (
+        token.replace("<", "&lt;").replace(">", "&gt;").replace(" ", "&nbsp;")
+    )
+    color = colors[feature_index]
+    style = (
+        f"background-color: rgba({color[0]}, {color[1]}, {color[2]},"
+        f" {score.item():.4f}); padding: 2px 4px; margin: 1px; border-radius:"
+        " 3px;"
+    )
+    html_parts.append(f"<span style='{style}'>{token_html}</span>")
+
+  html_parts.append("</div>")
+
+  return "".join(html_parts)
 
 
 def visualize_saliency(

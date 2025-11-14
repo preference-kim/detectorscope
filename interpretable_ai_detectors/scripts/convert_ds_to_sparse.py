@@ -13,19 +13,23 @@
 # limitations under the License.
 # ==============================================================================
 
-"""Converts a dataset of SAE activations to a sparse tensor of max activations.
+"""Creates a max activation cache from a dataset containing sparse activations.
 
 This script loads a dataset containing sparse SAE activations, computes the
 maximum activation for each feature across different tokens, and saves the
-result as a single sparse CSR tensor.
+result as a single sparse CSR tensor to later be loaded as a MaxActivationCache.
 """
 
 import argparse
 import os
+from typing import Any, Iterator
 
+import accelerate
 import datasets
 import torch
 import tqdm
+
+CSR_KEYS = ["crow_indices", "col_indices", "values", "size"]
 
 
 def get_max_activation(t: torch.sparse_csr_tensor) -> torch.sparse_coo_tensor:
@@ -60,19 +64,32 @@ def get_max_activation(t: torch.sparse_csr_tensor) -> torch.sparse_coo_tensor:
   )
 
 
-def ds_to_sparse_tensor(ds, batch_size: int = 100):
+def iterate_slice(ds_slice: datasets.Dataset) -> Iterator[dict[str, Any]]:
+  """Iterate over a slice of the dataset and only return the CSR keys."""
+  for i in range(len(ds_slice[CSR_KEYS[0]])):
+    yield {col: ds_slice[col][i] for col in CSR_KEYS}
+
+
+def ds_to_sparse_tensor(
+    ds: datasets.Dataset,
+    batch_size: int = 100,
+    separate_columns: bool = True,
+    values_col: str = "hook_sae_acts_post",
+) -> torch.sparse_csr_tensor:
   """Convert the dataset to a 3D sparse tensor."""
+  iterator = iterate_slice if separate_columns else (lambda x: x[values_col])
+
   ds = ds.with_transform(
       lambda x: {
-          "hook_sae_acts_post": [
-              get_max_activation(torch.sparse_csr_tensor(**contents))
-              for contents in x["hook_sae_acts_post"]
+          "sae_activation": [
+              get_max_activation(torch.sparse_csr_tensor(**row))
+              for row in iterator(x)
           ]
       }
   )
 
   batches = [
-      torch.cat(ds[i : i + batch_size]["hook_sae_acts_post"], dim=0)
+      torch.cat(ds[i : min(i+batch_size, len(ds)-1)]["sae_activation"], dim=0)
       for i in tqdm.tqdm(range(0, len(ds), batch_size))
   ]
 
@@ -96,6 +113,16 @@ if __name__ == "__main__":
       help="Batch size for sparse vector concatenation",
   )
   parser.add_argument(
+      "--csr_separate_columns",
+      action="store_true",
+      help="If true, csr columns are separated in the source dataset",
+  )
+  parser.add_argument(
+      "--do_shard",
+      action="store_true",
+      help="If true, shard dataset",
+  )
+  parser.add_argument(
       "-o",
       "--output_file",
       type=str,
@@ -105,6 +132,18 @@ if __name__ == "__main__":
   args = parser.parse_args()
 
   dataset = datasets.load_from_disk(args.data_path)
-  sparse_tensor = ds_to_sparse_tensor(dataset, args.batch_size)
+
+  if args.csr_separate_columns:
+    dataset = dataset.select_columns(CSR_KEYS)
+
+  if args.do_shard:
+    accelerator = accelerate.Accelerator()
+    dataset = dataset.shard(  # pytype: disable=attribute-error
+        num_shards=accelerator.num_processes, index=accelerator.process_index
+    )
+
+  sparse_tensor = ds_to_sparse_tensor(
+      dataset, args.batch_size, args.csr_separate_columns
+  )
 
   torch.save(sparse_tensor, os.path.join(args.data_path, args.output_file))

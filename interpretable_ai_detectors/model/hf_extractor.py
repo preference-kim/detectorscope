@@ -74,15 +74,15 @@ class HFExtractor:
     for hook_name in hooks:
       # NOTE: We re-define this fn within the loop to allow each hook_fn
       #       to have a different default hook_name argument
-      def hook_fn(module, input_embeds, output_embeds, hook=hook_name):
-        del module  # Unused.
-        embeddings = {"input": input_embeds, "output": output_embeds}
-        for name, embedding in embeddings.items():
-          if isinstance(embedding, tuple):
-            embedding = embedding[0] if embedding else torch.tensor(embedding)
-          if detach:
-            embedding = embedding.detach()
-          self.captured_activation[hook + "_" + name] = embedding.cpu()
+      def hook_fn(module, input_embed, output_embed, hook=hook_name):
+        del module, output_embed  # Unused.
+        if isinstance(input_embed, tuple):
+          input_embed = (
+              input_embed[0] if input_embed else torch.tensor(input_embed)
+          )
+        if detach:
+          input_embed = input_embed.detach()
+        self.captured_activation[hook + "_input"] = input_embed.cpu()
 
       if module := self.string_to_module(hook_name):
         handles.append(module.register_forward_hook(hook_fn))

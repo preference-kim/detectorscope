@@ -64,9 +64,7 @@ def load_data(
   ds = datasets.load_dataset(dataset_id)
 
   if target_model:
-    ds = ds.filter(
-        lambda x: x[model_col].lower() in {HUMAN, target_model}
-    )
+    ds = ds.filter(lambda x: x[model_col].lower() in {HUMAN, target_model})
 
   def tokenize_data_row(row):
     """Tokenize, truncate, and pad to 1024."""

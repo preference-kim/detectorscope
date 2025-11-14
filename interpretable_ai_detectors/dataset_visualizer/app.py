@@ -18,6 +18,7 @@
 import argparse
 import os
 
+from typing import Any, Iterator
 import datasets
 import flask
 from interpretable_ai_detectors.model.activation_cache import MaxActivationCache
@@ -28,6 +29,8 @@ import torch
 
 # TODO(liamdugan): change this to be dynamically calculated from dataset
 SAE_WIDTH = 16384
+
+CSR_KEYS = ["crow_indices", "col_indices", "values", "size"]
 
 
 def create_app(
@@ -67,6 +70,9 @@ def create_app(
           dataset[index][args.text_col], prepend_bos=extractor.prepend_bos
       )
 
+      # Change tokens to repr
+      tokens = [repr(t)[1:-1] for t in tokens]
+
       # Get the activation for the sequence
       tensor_values = torch.sparse_csr_tensor(
           **dataset[index][args.values_col]
@@ -94,9 +100,12 @@ def create_app(
   def feature_explanation(feature_index):
     """Serve the explanation text for a feature."""
     try:
-      return flask.jsonify(
-          {"explanation": get_explanations_for_sae_feature(feature_index)}
+      explanation = (
+          get_explanations_for_sae_feature(feature_index)
+          if args.use_neuronpedia_explanations
+          else ""
       )
+      return flask.jsonify({"explanation": explanation})
     except TypeError as e:
       return (
           flask.jsonify({"error": f"Failed to get explanation: {str(e)}"}),
@@ -105,10 +114,12 @@ def create_app(
 
   @app.route("/api/active_rows/<int:feature_index>")
   def active_rows(feature_index):
-    """Serve the list of active rows for a feature."""
+    """Serve the list of active rows for a feature sorted by max activation."""
     try:
+      activations = cache.get_max_activations(feature_index)
+      sorted_activations = sorted(activations, key=lambda x: x[1], reverse=True)
       return flask.jsonify(
-          {"active_rows": cache.get_active_docs(feature_index)}
+          {"active_rows": [x[0] for x in sorted_activations]}
       )
     except TypeError as e:
       return (
@@ -136,6 +147,11 @@ if __name__ == "__main__":
       help="The name of the column containing the text/tokens.",
   )
   parser.add_argument(
+      "--use_neuronpedia_explanations",
+      action="store_true",
+      help="If true, query feature explanations from neuronpedia",
+  )
+  parser.add_argument(
       "-v",
       "--values_col",
       type=str,
@@ -145,6 +161,20 @@ if __name__ == "__main__":
   parsed_args = parser.parse_args()
 
   ds = datasets.load_from_disk(parsed_args.dataset)
+
+  # If values column is not present, construct it from the CSR keys
+  if parsed_args.values_col not in ds.column_names:
+    if not all([key in ds.column_names for key in CSR_KEYS]):
+      raise ValueError(f"Couldn't find values column {parsed_args.values_col}")
+
+    def iterate_slice(ds_slice: datasets.Dataset) -> Iterator[dict[str, Any]]:
+      """Iterate over a slice of the dataset and only return the CSR keys."""
+      for i in range(len(ds_slice[CSR_KEYS[0]])):
+        yield {col: ds_slice[col][i] for col in CSR_KEYS}
+
+    ds = ds.with_transform(
+        lambda x: {parsed_args.values_col: list(iterate_slice(x))} | x
+    )
 
   sae_extractor = SAEExtractor()
   activation_cache = MaxActivationCache(

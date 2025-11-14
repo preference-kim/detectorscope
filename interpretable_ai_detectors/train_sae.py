@@ -38,6 +38,65 @@ import torch.nn.functional as F
 from torch.utils import data
 from torch.utils import tensorboard
 import tqdm
+from typing_extensions import override
+
+
+class TokenShuffleDataset(data.IterableDataset):
+  """Dataset that shuffles tokens for training full sequence SAEs."""
+
+  def __init__(
+      self,
+      ds: datasets.Dataset,
+      col: str,
+      buf_size: int = 1000000,
+      seed: int = 42,
+  ):
+    super().__init__()
+    self.ds = ds
+    self.col = col
+    self.buf_size = buf_size
+    self.seed = seed
+    self.epoch = 0
+
+  @override
+  def __len__(self):
+    # HACK: 650 is roughly the average number of tokens per example in the
+    # dataset. This is used to set the tqdm bar for training.
+    # TODO(liamdugan): Replace with a more accurate estimate.
+    return 650 * len(self.ds)
+
+  def _get_row_iterator(self, worker_id, num_workers, epoch):
+    shuffled_ds = self.ds.shuffle(seed=self.seed + epoch, keep_in_memory=False)
+
+    indices_per_worker = math.ceil(len(self.ds) / num_workers)
+    start_idx = worker_id * indices_per_worker
+    end_idx = min(start_idx + indices_per_worker, len(self.ds))
+
+    for i in range(start_idx, end_idx):
+      yield shuffled_ds[i]
+
+  @override
+  def __iter__(self):
+    worker_info = data.get_worker_info()
+    worker_id = worker_info.id if worker_info else 0
+    num_workers = worker_info.num_workers if worker_info else 1
+
+    # TODO(myuzaki): switch to using a single rng for all workers and split seed
+    self.epoch += 1
+    rng = random.Random(self.seed * (self.epoch + 1) + worker_id)
+    buffer = []
+
+    for row in self._get_row_iterator(worker_id, num_workers, self.epoch):
+      for i in range(1, row[self.col].shape[1]):
+        buffer.append(row[self.col][0, i, :])
+        if len(buffer) >= self.buf_size:
+          rng.shuffle(buffer)
+          while buffer:
+            yield {self.col: buffer.pop()}
+
+    rng.shuffle(buffer)
+    while buffer:
+      yield {self.col: buffer.pop()}
 
 
 def deduplicate_dataset(ds: datasets.Dataset, col: str) -> datasets.Dataset:
@@ -84,7 +143,6 @@ def recombine_gradients(
     model: nn.Module, stored_gradients: list[torch.Tensor]
 ) -> nn.Module:
   """Add all stored gradients to existing model gradients."""
-  assert len(stored_gradients) == len(model.parameters())
   for stored_grad, param in zip(stored_gradients, model.parameters()):
     if stored_grad is None:
       continue
@@ -126,6 +184,8 @@ def load_dataset(
     balance_col: str,
     use_labels: bool,
     label_col: str,
+    target_model: str,
+    do_token_shuffle: bool,
 ) -> tuple[data.DataLoader, data.DataLoader]:
   """Loads dataset from local path, and creates the train and test dataloaders.
 
@@ -141,11 +201,16 @@ def load_dataset(
       balance_col (str): column to balance the dataset across
       use_labels (bool): if True, include binary labels in the dataset
       label_col (str): column to use to compute labels
+      target_model (str): if non-empty, filter to only include target model
+      do_token_shuffle (bool): if true, shuffle tokens from different sequences
 
   Returns:
       a tuple of Dataloader objects (train_loader, test_loader)
   """
   ds = datasets.load_from_disk(data_path)
+
+  if target_model:
+    ds = ds.filter(lambda x: x[label_col].lower() in {"human", target_model})
 
   def add_label_column(row):
     """Convert model name to binary and add as new column 'labels'."""
@@ -171,14 +236,26 @@ def load_dataset(
     ds = ds.select_columns([col_name])
 
   ds = ds.with_format("torch", dtype=torch.float32)
+  split = ds.train_test_split(test_size=test_size, shuffle=True, seed=42)
 
-  split = ds.train_test_split(test_size=test_size, shuffle=True)
-  train_loader = data.DataLoader(
-      split["train"], batch_size=batch_size, num_workers=4, shuffle=True
-  )
-  test_loader = data.DataLoader(
-      split["test"], batch_size=batch_size, num_workers=4, shuffle=False
-  )
+  if do_token_shuffle:
+    train_loader = data.DataLoader(
+        TokenShuffleDataset(split["train"], col_name),
+        batch_size=batch_size,
+        num_workers=8,
+    )
+    test_loader = data.DataLoader(
+        TokenShuffleDataset(split["test"], col_name),
+        batch_size=batch_size,
+        num_workers=8,
+    )
+  else:
+    train_loader = data.DataLoader(
+        split["train"], batch_size=batch_size, num_workers=4, shuffle=True
+    )
+    test_loader = data.DataLoader(
+        split["test"], batch_size=batch_size, num_workers=4, shuffle=False
+    )
 
   return train_loader, test_loader
 
@@ -194,22 +271,24 @@ def evaluate(
   model.eval()
   losses = collections.defaultdict(list)
   with torch.no_grad():
-    for batch in data_loader:
-      labels = (
-          batch["labels"].to(model.device) if "labels" in batch else None
-      )
-      batch = batch[col_name].to(model.device)
-      reconst, features = model.forward(batch)
-      loss = model.loss_fn(
-          batch, reconst, features, sparsity_coeff, e2e_coeff, labels
-      )
+    with tqdm.tqdm(total=len(data_loader), desc="Evaluating Model") as pbar:
+      for batch in data_loader:
+        labels = batch["labels"].to(model.device) if "labels" in batch else None
+        batch = batch[col_name].to(model.device)
 
-      mean_mse = ((batch - batch.mean(dim=0)) ** 2).mean(dim=-1)
-      loss["total"] = sum(loss.values())
-      loss["fvu"] = loss["mse"] / mean_mse
+        reconst, features = model.forward(batch)
+        loss = model.loss_fn(
+            batch, reconst, features, sparsity_coeff, e2e_coeff, labels
+        )
 
-      for key in loss.keys():
-        losses[key].append(loss[key])
+        mean_mse = ((batch - batch.mean(dim=0)) ** 2).mean(dim=-1)
+        loss["total"] = sum(loss.values())
+        loss["fvu"] = loss["mse"] / mean_mse
+
+        for key in loss.keys():
+          losses[key].append(loss[key])
+
+        pbar.update(1)
 
   return {k: torch.cat(v) for k, v in losses.items()}
 
@@ -292,9 +371,7 @@ def train(
         model.train()
         optimizer.zero_grad()
 
-        labels = (
-            batch["labels"].to(device) if "labels" in batch else None
-        )
+        labels = batch["labels"].to(device) if "labels" in batch else None
         batch = batch[col].to(device)
         step = (epoch * len(train_loader) + i) * batch_size
 
@@ -594,6 +671,18 @@ if __name__ == "__main__":
       default=1.0,
       help="Coefficient to use for E2E loss term",
   )
+  parser.add_argument(
+      "-tm",
+      "--target_model",
+      type=str,
+      default="",
+      help="Target model to train on",
+  )
+  parser.add_argument(
+      "--do_token_shuffle",
+      action="store_true",
+      help="If true, shuffle all token activations in the dataset",
+  )
   args = parser.parse_args()
 
   if args.rescale_model:
@@ -631,6 +720,8 @@ if __name__ == "__main__":
       balance_col=args.balance_col,
       use_labels=bool(args.e2e_model_path is not None),
       label_col=args.balance_col,
+      target_model=args.target_model,
+      do_token_shuffle=args.do_token_shuffle,
   )
 
   if args.use_pre_enc_bias:

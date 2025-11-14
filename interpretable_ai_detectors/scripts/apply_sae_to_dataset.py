@@ -22,6 +22,7 @@ dataset with the added 'sae_activation' column.
 
 import argparse
 
+import accelerate
 import datasets
 from interpretable_ai_detectors.sae.models.jumprelu_sae import JumpReLUSAE
 import torch
@@ -49,6 +50,16 @@ if __name__ == "__main__":
       help="Name of column to apply the SAE to in the source dataset",
   )
   parser.add_argument(
+      "--process_all_tokens",
+      action="store_true",
+      help="If true, run sae activations for all tokens in the sequence",
+  )
+  parser.add_argument(
+      "--do_shard",
+      action="store_true",
+      help="If true, shard the dataset across multiple processes",
+  )
+  parser.add_argument(
       "-o",
       "--output_path",
       type=str,
@@ -59,8 +70,15 @@ if __name__ == "__main__":
   print("Loading dataset...")
   ds = datasets.load_from_disk(args.data_path)
   ds = ds.with_format("torch", dtype=torch.float32)
-
   device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+  # If we're sharding, initialize accelerator and shard dataset
+  if args.do_shard:
+    accelerator = accelerate.Accelerator()
+    device = accelerator.device
+    ds = ds.shard(  # pytype: disable=attribute-error
+        num_shards=accelerator.num_processes, index=accelerator.process_index
+    )
 
   print("Loading SAE...")
   state_dict = torch.load(args.sae_path)
@@ -71,6 +89,18 @@ if __name__ == "__main__":
   sae_model.load_state_dict(state_dict)
   sae_model = sae_model.to(device).eval()
 
+  def run_sae_and_sparsify(
+      row: dict[str, torch.Tensor],
+  ) -> dict[str, torch.Tensor]:
+    _, features = sae_model.forward(row[args.column_name].to(device))
+    features = features.detach().to_sparse(layout=torch.sparse_csr).cpu()
+    return {
+        "crow_indices": features.crow_indices(),
+        "col_indices": features.col_indices(),
+        "values": features.values(),
+        "size": list(features.size()),
+    }
+
   def run_sae_batched(
       batch: dict[str, torch.Tensor],
   ) -> dict[str, torch.Tensor]:
@@ -78,7 +108,14 @@ if __name__ == "__main__":
     return {"sae_activation": features.detach().cpu()}
 
   print("Applying SAE to dataset...")
-  processed_ds = ds.map(run_sae_batched, batched=True, batch_size=128)
+  if args.process_all_tokens:
+    processed_ds = ds.map(run_sae_and_sparsify)
+  else:
+    processed_ds = ds.map(run_sae_batched, batched=True, batch_size=128)
+
+  # Remove the original activation column from the dataset to save space
+  processed_ds = processed_ds.remove_columns(args.column_name)
   processed_ds.reset_format()
 
-  processed_ds.save_to_disk(args.output_path)
+  shard_index = f"_shard{accelerator.process_index}" if args.do_shard else ""  # pytype: disable=undefined-variable
+  processed_ds.save_to_disk(args.output_path + shard_index)

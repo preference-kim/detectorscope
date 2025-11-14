@@ -101,13 +101,14 @@ def split_csr_tensor(
 def get_top_k_docs(
     feature_index: int,
     k: int,
+    text_col: str,
     dataset: datasets.Dataset,
     cache: MaxActivationCache,
 ) -> tuple[list[str], list[tuple[int, float]]]:
   """Get the top k documents in format: doc, (doc_id, max_activation)."""
   docs = cache.get_max_activations(feature_index)
   top_k_docs = sorted(docs, key=lambda x: x[1], reverse=True)[:k]
-  return dataset[[x[0] for x in top_k_docs]]["response"], top_k_docs
+  return zip(dataset[[x[0] for x in top_k_docs]][text_col], top_k_docs)
 
 
 def compute_log_odds(cache: MaxActivationCache) -> list[float]:
@@ -120,26 +121,30 @@ def compute_log_odds(cache: MaxActivationCache) -> list[float]:
 def split_cache(
     dataset: datasets.Dataset,
     cache: MaxActivationCache,
-    col: str,
+    model_col: str,
     condition: str,
 ) -> torch.Tensor:
   """Split existing max activation cache on a column of the dataset."""
-  indices = np.where(np.array(dataset[col]) == condition)[0].tolist()
+  indices = np.where(np.array(dataset[model_col]) == condition)[0].tolist()
   return split_csr_tensor(cache.features, indices)
 
 
 def print_top_k_to_file(
     dataset: datasets.Dataset,
     cache: MaxActivationCache,
+    text_col: str,
     log_odds_ratios: list[tuple[int, float]],
     name: str,
     k: int = 10,
 ):
-  with open(f"{name}_top_docs.txt", "w+") as f:
-    for feature_id, feature_lor in log_odds_ratios:
-      f.write(f"Feature {feature_id} (LOR: {feature_lor}) Top-{k} docs\n")
-      for doc, (doc_id, activ) in get_top_k_docs(feature_id, k, dataset, cache):
-        f.write(f"{doc_id} - {activ} -- {repr(doc)}\n")
+  """Print top k documents for each feature to a text file."""
+  with open(f"{name}_top_docs.txt", "w+") as file:
+    for fid, feature_lor in log_odds_ratios:
+      file.write(f"Feature {fid} (LOR: {feature_lor}) Top-{k} docs\n")
+      for doc, (doc_id, activ) in get_top_k_docs(
+          fid, k, text_col, dataset, cache
+      ):
+        file.write(f"{doc_id} - {activ} -- {repr(doc)}\n")
 
 
 def plot_lor_histogram(
@@ -180,17 +185,39 @@ if __name__ == "__main__":
       help="Path to the dataset",
   )
   parser.add_argument(
-      "-s",
-      "--sae_path",
+      "-t",
+      "--text_col",
       type=str,
-      help="Path to the .pth file to load the sae from",
+      default="response",
+      help="Name of text column in the dataset",
   )
   parser.add_argument(
-      "-c",
-      "--column_name",
+      "-m",
+      "--model_col",
       type=str,
-      default="norm_input",
-      help="Name of column to apply the SAE to in the source dataset",
+      default="response",
+      help="Name of model column in the dataset",
+  )
+  parser.add_argument(
+      "-a",
+      "--activations_col",
+      type=str,
+      default="sae_activation",
+      help="Name of column that contains the SAE activations",
+  )
+  parser.add_argument(
+      "-tm",
+      "--target_model",
+      type=str,
+      default="",
+      help="Target model to compute LOR for",
+  )
+  parser.add_argument(
+      "-o",
+      "--output_path",
+      type=str,
+      default="log_odds_ratios.txt",
+      help="Path to output text file to write all log odds ratios",
   )
   parser.add_argument(
       "-n",
@@ -199,70 +226,87 @@ if __name__ == "__main__":
       default="top_k_docs.csv",
       help="Name of output csv containing top k docs for each feature",
   )
-  parser.add_argument(
-      "-o",
-      "--output_path",
-      type=str,
-      help="Name of the location to save the new dataset to",
-  )
   args = parser.parse_args()
 
   cache_path = os.path.join(args.data_path, "max_activations.pth")
   human_cache_path = os.path.join(args.data_path, "human_max_activations.pth")
-  gpt4_cache_path = os.path.join(args.data_path, "gpt4_max_activations.pth")
+  target_cache_path = os.path.join(
+      args.data_path, f"{args.target_model}_max_activations.pth"
+  )
 
   ds = datasets.load_from_disk(args.data_path)
   ds = ds.with_format("torch", dtype=torch.float32)
 
   # If max activation cache does not exist, create it
   if not os.path.exists(cache_path):
-    full_cache = convert_ds_to_activation_cache(ds, args.column_name)
+    full_cache = convert_ds_to_activation_cache(ds, args.activations_col)
     torch.save(full_cache, cache_path)
   full_cache = MaxActivationCache(cache_path)
 
   if not os.path.exists(human_cache_path):
-    human_cache = split_cache(ds, full_cache, "condition", "Human")
+    human_cache = split_cache(ds, full_cache, args.model_col, "Human")
     torch.save(human_cache, human_cache_path)
   human_cache = MaxActivationCache(human_cache_path)
 
-  if not os.path.exists(gpt4_cache_path):
-    gpt4_cache = split_cache(ds, full_cache, "condition", "GPT4")
-    torch.save(gpt4_cache, gpt4_cache_path)
-  gpt4_cache = MaxActivationCache(gpt4_cache_path)
+  if not os.path.exists(target_cache_path):
+    target_cache = split_cache(
+        ds, full_cache, args.model_col, args.target_model
+    )
+    torch.save(target_cache, target_cache_path)
+  target_cache = MaxActivationCache(target_cache_path)
+
+  # Get feature density for each cache
+  density = full_cache.get_feature_density()
+  human_density = human_cache.get_feature_density()
+  target_density = target_cache.get_feature_density()
+  density_frac = [float(d) / float(len(ds)) for d in density]
 
   # Compute Log odds ratio of features
   human_log_odds = compute_log_odds(human_cache)
-  gpt4_log_odds = compute_log_odds(gpt4_cache)
+  target_log_odds = compute_log_odds(target_cache)
   log_odds_ratio = [
-      hlo - glo for hlo, glo in zip(human_log_odds, gpt4_log_odds)
+      hlo - glo for hlo, glo in zip(human_log_odds, target_log_odds)
   ]
+
+  # Zip all feature densities
+  feature_density = list(zip(
+      enumerate(log_odds_ratio), human_density, target_density, density_frac
+  ))
+
+  # Print LOR and densities of all features to a text file
+  with open(args.output_path, "w+") as f:
+    sorted_odds = sorted(feature_density, key=lambda x: x[1][2], reverse=True)
+    for (feature_id, lor), hd, td, df in sorted_odds:
+      f.write(f"Feature {feature_id} (LOR: {lor}) :: {hd} :: {td} :: {df}\n")
 
   # Sort feature IDs by log odds ratio
   sorted_lor = sorted(
       list(enumerate(log_odds_ratio)), key=lambda x: x[1], reverse=False
   )
 
+  # Remove features with log odds ratio close to 0
+  sorted_lor = [r for r in sorted_lor if abs(r[1]) > 1e-7]
+
   # Print top k documents for each of the features to a text file
-  feature_top_k = 100
-  print_top_k_to_file(ds, full_cache, sorted_lor[:feature_top_k:-1], "human")
-  print_top_k_to_file(ds, full_cache, sorted_lor[:feature_top_k], "gpt4")
+  feat_top_k = min(100, len(sorted_lor))
+  print_top_k_to_file(
+      ds, full_cache, args.text_col, sorted_lor[:-(feat_top_k+1):-1], "human",
+  )
+  print_top_k_to_file(
+      ds, full_cache, args.text_col, sorted_lor[:feat_top_k], args.target_model,
+  )
+
+  # Plot histogram of log odds ratios
+  plot_lor_histogram(sorted_lor)
 
   # Output top 25 documents in the dataset for all features
   top_k = 25
   records = []
+  col = args.text_col
   for i, lor in sorted_lor:
-    for d, (d_id, d_activ) in get_top_k_docs(i, top_k, ds, full_cache):
-      records.append(
-          {
-              "id": i,
-              "lor": lor,
-              "doc": d,
-              "doc_id": d_id,
-              "activ": d_activ,
-          }
-      )
+    for d, (d_id, d_activ) in get_top_k_docs(i, top_k, col, ds, full_cache):
+      records.append({
+          "id": i, "lor": lor, "doc": d, "doc_id": d_id, "activ": d_activ
+      })
   df = pd.DataFrame(records)
   df.to_csv(args.top_k_docs_csv_name, index=False)
-
-  # Plot histogram of log odds ratios
-  plot_lor_histogram(sorted_lor)
