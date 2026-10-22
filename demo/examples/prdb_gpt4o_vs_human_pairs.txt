@@ -1,0 +1,321 @@
+PRDB test set: 4 paired reviews (GPT-4o generated vs. the original human review for the same paper).
+Sampled with random.seed(0) from the gpt4o / human subsets (28,684 rows each, same row order).
+
+====================================================================================================
+PAIR 1 | GPT-4o | id=gpt-4o-batch-ICLR2019-1578-S1x1C3I7i7 | ICLR2019 | rating='Good paper, accept' | confidence='4'
+====================================================================================================
+The paper introduces a new probabilistic neural-symbolic model for visual question answering (VQA) known as Variational Neural Module Networks (V-NMN). It aims to provide interpretable explanations in the form of programs, learning from a small annotated set of human programs. The paper's originality lies in its novel integration of probabilistic methods with neural-symbolic models to interpret VQA and address compositional generalization. This approach differentiates V-NMN from existing models by embedding a probabilistic latent variable, enhancing interpretability and statistical sharing across questions.
+
+From a scientific rigor perspective, the authors present a solid methodological framework. They employ an effective three-stage optimization strategy: question coding, module training, and joint training. This hierarchical approach allows the model to improve interpretability and VQA accuracy in low-data regimes. The experiments on the SHAPES dataset demonstrate the model's ability to outperform existing neural-symbolic models, particularly in data-sparse conditions. The use of Monte Carlo gradients and score function estimators to optimize their model is well-grounded in existing theoretical foundations. The authors effectively address the challenges associated with discrete latent variables in the training process.
+
+The paper is clear and well-structured, with a thorough description of both the high-level motivation and the detailed technical contributions. It successfully links prior work with new developments, providing a comprehensive literature review and positioning the contribution within the broader context of neuro-symbolic AI. The clarity in outlining the V-NMN's architecture, parameterization, and the elbo optimization stages supports the reader's understanding.
+
+Significance is observed in its advancement of the state of the art in interpretable VQA, with potential applicability to other domains requiring compositional reasoning. By emphasizing interpretability alongside performance, the authors contribute meaningfully to the evolving discourse on trustworthy AI systems. The experiments conducted show ingenuity in evaluating various degrees of program supervision, highlighting the model's robustness and adaptability.
+
+Overall quality and presentation are commendable. The paper presents a comprehensive suite of experiments supporting the claims of improved interpretability and accuracy. The results are thorough, with quantitative and qualitative insights effectively illustrated through tables and examples. The inclusion of detailed appendices and explanation of methodology enriches the paper's robustness.
+
+In conclusion, this paper presents a significant and novel contribution to the field of interpretable VQA through probabilistic methods, aligning well with the interests of the AI research community.
+
+====================================================================================================
+PAIR 1 | HUMAN | id=human-ICLR2019-1578-S1x1C3I7i7 | ICLR2019 | rating='7: Good paper, accept' | confidence='3: The reviewer is fairly confident that the evaluation is correct'
+====================================================================================================
+The paper presents a new approach for performing visual query answering. System responses are programs that can explain the truth value of the answer.
+In the paper, both the problems of learning and inference are taken into account.
+To answer queries, this system takes as input an image and a question, which is a set of word from a given vocabulary. Then the question is modeled by a plan (a series of operation that must be performed to answer the query).  Finally, the found answer with the plan are returned. To learn the parameters of the model, the examples are tuples composed by an image, a question, the answer, and the program.
+Experiments performed on the SHAPES dataset show good performance compared to neural model networks by Johnson et al.
+
+The paper is well written and clear. I have not found any specific problems in the paper, the quality is high and the approach seems to me to be new and worth studying.
+The discussion on related work seems to be good, as well as the discussion on the results of the tests conducted.
+
+On page 5, in equation (3) it seems to me that something is missing in J. Moreover, In Algorithm 1, in lines 4 and 9, the B after the arrow should be written in italic.
+
+Overall, there are several typos that must be corrected. I suggest a double check of the English. For example:
+- page 3, "as modeling *uncertaintly* should..."
+- page 6, "Given this goal, we *consrtuct* a latent *varible* ..."
+- page 8, in paragraph "Effect of optimizing the true ELBO", the word "that" is repeated twice in the 3rd row
+- page 13, "for the" repeated twice in "Moving average baseline" paragraph. Also, in the last line of this paragraph, the sentence seems incomplete.
+
+
+
+Pros
+- The results are convincing
+- The approach is clearly explained
+
+Cons
+- English must be checked
+
+====================================================================================================
+PAIR 2 | GPT-4o | id=gpt-4o-batch-NeurIPS2021-8066-sJ188Ps5otE | NeurIPS2021 | rating='7: Good paper, accept' | confidence='4'
+====================================================================================================
+**Summary**
+The paper titled 'Neural Symplectic Form: Learning Hamiltonian Equations on General Coordinate Systems' introduces a new method for learning Hamiltonian equations from data represented in general coordinate systems, using neural networks. The authors address the limitations of existing methods that require data to be in specific coordinate systems, such as the Darboux coordinates. The proposed approach utilizes a symplectic geometric framework to learn the symplectic 2-form from data, which corresponds to a skew-symmetric matrix but ensures that the learned structure remains Hamiltonian by deriving it from a differential 1-form. This enables the model to work with data not explicitly using generalized momenta, expanding its applicability. They demonstrate that the model efficiently learns the Hamiltonian structure from data, including polynomial ordinary differential equations like the Lotka-Volterra equation, showing that such hidden structures can indeed be extracted. Through several experiments, including systems like the Lotka-Volterra and double pendulum, the authors show the advantages of their method in terms of predictive accuracy and energy conservation, compared to existing HNN and LNN models.
+
+**Main Review**
+The paper offers a significant contribution to the field of learning Hamiltonian dynamics, especially by overcoming the limitations of requiring known generalized coordinates. The method employs the coordinate-free representation of Hamiltonian systems using the symplectic 2-form, learned through neural networks, which is a novel and impactful idea. The paper's strengths include a clear exposition of the motivation behind using a coordinate-free approach, the detailed explanation of their methodology, and the performance of their model in various experimental validations. The experiments convincingly show that the proposed method, Neural Symplectic Form, provides better or comparable predictions for complex systems compared to other models such as HNN and LNN. Additionally, the paper is thorough in discussing both theoretical foundations and practical efficacy, which is bolstered by proofs of energy conservation and universal approximation property within appropriate settings. However, the paper could benefit from a more detailed discussion on the computational cost implications, as calculating inverses of matrices in large systems might be problematic. Future work suggestions such as applying perturbation theory are insightful, but further experiments on scalability would enhance credibility. The concept of deriving the symplectic 2-form from the exterior derivative of a 1-form to ensure Hamiltonian properties is a crucial innovation and implemented well in this research.
+
+**Limitations and Societal Impact**
+The authors have satisfactorily addressed the limitations of their work, particularly highlighting the computational challenges associated with matrix inversions in large-scale applications. A fruitful addition would be empirical results showcasing scalability and computational considerations, possibly involving high-dimensional data. As for societal impact, the work primarily deals with theoretical advancements in understanding dynamical systems, and its implications do not directly extend to areas with ethical concerns. However, as this could empower machine learning to model more complex systems, interdisciplinary scrutiny might be needed for applications outside the researchers' scope, including widespread deployment in sensitive domains such as autonomous systems or economic modeling.
+
+====================================================================================================
+PAIR 2 | HUMAN | id=human-NeurIPS2021-8066-sJ188Ps5otE | NeurIPS2021 | rating='7: Good paper, accept' | confidence='4: You are confident in your assessment, but not absolutely certain. It is unlikely, but not impossible, that you did not understand some parts of the submission or that you are unfamiliar with some pieces of related work.'
+====================================================================================================
+**Summary**
+This paper proposes to learn conservative physical dynamics from data by directly learning a differential 1-form. The dynamics is subsequently determined by computing the exterior derivative of the learned 1-form (yielding a symplectic 2-form) and providing a coordinate-free representation of the dynamics. In addition to inherently preserving the symplectic nature of the dynamics, this procedure does not require *a priori* knowledge of the generalized momentum coordinates, i.e. only velocities need be observed so masses of the degrees of freedom in the data are not needed. The neural symplectic form methodology is compared to an approach in which the symplectic 2-form is learned directly as a skew-symmetric matrix as well the existing Hamiltonian neural network and Lagrangian neural network approaches.
+
+**Main Review**
+Learning the underlying Hamiltonian structure of observed trajectorial data requires methodologies that are sensitive to the conservation laws inherent in the physical structure of Hamilton's equations of motion. Without a doubt, conservation of energy is the most important property to preserve. This can be achieved by using a symplectic integration and learning with a symplectic integration scheme noticeably improves the quality of learning (cf. Chen et al. https://arxiv.org/abs/1909.13334 which should surely be cited). Indeed, a direct approach of this type requires rather complete information about the system, including knowledge of all generalized positions and momenta along a time series. This paper aims to relax this requirement by parameterizing a coordinate-free representation of the equations of motion, an elegant idea with significant potential impact.
+
+The formulation of the algorithm relies on (1) representing the Hamiltonian $H$ as a neural network and (2) either representing the symplectic 2-form $W_u$ as a neural network or representing a 1-form as a neural network and computing its exterior derivative to compute $W_u$. These formulations constitute the core contribution of the paper. In both cases, the authors establish formally that the dynamics conserves energy (a comment in the proof of Theorem 1 could be added to indicate that the argument also applies to Theorem 2). The proof of the universal approximation theorem is rather perfunctory, but I do think it constitutes a reasonable addition to this work. The arguments for all three theorems are essentially standard results.
+
+The motivation for preferring the neural symplectic form approach is motivated, in part, by invoking de Rham cohomology. I found this to be a bit of a distraction, likely to lead to confusion. The articulation beginning at line 153 struck me as a much clearer and conceptually better explanation of why one should prefer learning the 1-form. Of course, if this could be clearly tied to the de Rham cohomology, it could be worthwhile to discuss this. Fig. 2 uses a lot of space and did not add meaningfully to the manuscript in my opinion. I appreciated the discussion of the computational cost of the inverse of $W_u$---this is a significant limitation of the algorithm for large systems. 
+
+I found the numerical experiments useful, concise, and sufficient to establish the efficacy of the method. 
+
+Is learning $W_u$ directly as a 2-form distinct from learning a mass matrix in the case where the kinetic energy is assumed to be harmonic?
+
+It would be useful for the authors to make some contact with the literature on learning potential energy functions (e.g., the work Tkatchenko and coworkers) because in that line of inquiry it has been concluded that learning with forces (learning the gradients of the Hamiltonian) is often superior to learning the potential energy. This strikes me as being analogous to learning the 1-form vs learning the 2-form and I'm not sure how to reconcile the two conclusions.
+
+**Limitations and Societal Impact**
+There are a few inherent limitations when it comes to scaling this problem up to large, many-body systems. First, it is hard to imagine a realistic setting in which one could observe all the positions of a complex system with sufficient spatio-temporal resolution. Secondly, most many-body systems will decorrelate over short times due to ergodicity and the onset of chaos. In my mind, this makes the problem a rather academic one without significant applications in physics per se. That said, discovering Hamiltonian structure in ODEs (as in the Lotka-Volterra example) provides a nice counterpoint to this criticism.
+
+====================================================================================================
+PAIR 3 | GPT-4o | id=gpt-4o-batch-NeurIPS2022-11895-2kxzc0J6Zj | NeurIPS2022 | rating='3: Reject: For instance, a paper with technical flaws, weak evaluation, inadequate reproducibility and incompletely addressed ethical considerations.' | confidence='3'
+====================================================================================================
+**Summary**
+The paper "Uniqueness and Complexity of Inverse MDP Models" explores the theoretical underpinnings of inverse Markov Decision Processes (MDP) and their implications for causal reasoning in reinforcement learning. The study investigates whether forward MDP models can be inferred from inverse models or minimized, bringing into focus several complex inverse model scenarios over multiple steps. The authors pose several main questions regarding the inference and uniqueness of these inverse models and propose algorithms to address these, with a focus on theoretical analysis backed by experiments on toy domains.
+
+**Strengths and Weaknesses**
+The paper introduces a set of novel questions regarding the inference capabilities of inverse MDP models, which could provide fresh insights into reinforcement learning and causal inference if resolved. It demonstrates some theoretical groundwork, employing dimensional analysis and linear relaxation to approach the problem, accompanied by simplified experiments on toy environments.
+
+However, the paper has several significant weaknesses. First and foremost, the core theoretical question of whether inverse models can fully determine forward dynamics remains inadequately addressed, leaving several questions practically unanswered. The methods proposed lack clarity and seem overly complex, with no substantial proofs or exceptional evidence that current algorithms can consistently derive unique or comprehensive solutions in real-world scenarios. The experimental validation is conducted on toy domains that may not adequately reflect realistic, complex environments, thus questionably supporting the paper's claims. This weakens the paper's reproducibility and applicability.
+
+Furthermore, the paper's organization and clarity are problematic. The dense mathematical notation and theoretical exposition are difficult to navigate, particularly without a strong foundation in the problem domain. The overlap between the experimental and theoretical sections lacks coherence, which makes the contribution's narrative weak and challenging to follow. Lastly, the potential societal impacts and limitations of the methods are not sufficiently discussed.
+
+**Questions**
+1. Can the authors provide empirical evidence or case studies in real-world environments to support the theoretical claims made in this paper? 
+2. How do the authors plan to tackle the non-uniqueness problems in scenarios where multiple mathematically valid solutions exist? 
+3. Can the paper's proposed algorithms handle larger-scale problems without significant reductions in effectiveness or efficiency? 
+4. What are the theoretical boundaries for environments where these inverse models can be effectively applied?
+
+**Limitations**
+The authors do not explicitly discuss the potential limitations and ethical considerations associated with their work. The focus on toy domains limits the understanding of practical implications in more complex, real-world environments. Additionally, ethical considerations regarding the application of inverse models in causal reasoning, especially in decision-critical environments, should be addressed. Providing insights into these aspects can greatly improve the utility of this work in practical settings.
+
+====================================================================================================
+PAIR 3 | HUMAN | id=human-NeurIPS2022-11895-2kxzc0J6Zj | NeurIPS2022 | rating='3: Reject: For instance, a paper with technical flaws, weak evaluation, inadequate reproducibility and incompletely addressed ethical considerations.' | confidence='2: You are willing to defend your assessment, but it is quite likely that you did not understand the central parts of the submission or that you are unfamiliar with some pieces of related work. Math/other details were not carefully checked.'
+====================================================================================================
+**Summary**
+This paper analyzes the prospects of inferring meaningful inverse models of discrete-time controlled Markov processes. In particular, the paper focuses on determining the existence/uniqueness properties of these inverse models, and investigate the computational complexity of computing them.
+
+**Strengths and Weaknesses**
+Unfortunately, several technical parts of this paper concern me. There are several mathematical statements that I believe to be invalid (see the Questions section). Moreover, I found the structure of the paper to be extremely confusing, especially the recurring "questions" which are rephrased several times, some of which (as far as I'm concerned) are not rephrased correctly. Finally, the notation used in the paper is very difficult to parse.
+
+**Questions**
+**General Question**: As the authors acknowledge, the setting here is not that of inverse MDPs, but inverse controlled Markov processes. I'd argue actually that it's simply inverse Markov chains, since the policy appears to be fixed everywhere. How do the studies in this paper differ from those in the inverse kinematics literature?
+
+  **Motivation: causal inference, line 24**: It is written that "An
+  inverse model captures the likelihood that an action $a$ was *the
+  cause* of the transition...", but is this truly correct? To my
+  understanding, such a conditional model is incapable of inferring
+  causation. Wouldn't one need some sort of counterfactual analysis as
+  well?
+
+  **Marginalizing variables in transition tensors**: On lines 120 and 121,
+  I believe there is an inconsistency in the notation. In the Notation
+  section, it is writen that $M^a_{\cdot\cdot}$ is the matrix at
+  dimension $a$, but here it is written $M^a$. I'm assuming $M^a,
+  M^a_{\cdot\cdot}$ represent the same thing, but then maybe the
+  $M^a_{\cdot\cdot}$ notation should be avoided altogether.
+
+  **Challenges with the backward model**: Line 127 says $B^{a+}\neq B^a$,
+  can this be expanded upon? This is unintuitive, at least to me. After
+  line 121, it says $B^a_{ss'} = p(a\mid ss')$, and after line 129 it
+  says $B^{a+}_{ss''} = p(a\mid ss'')$, thus
+
+  \begin{equation*}
+  \begin{aligned}
+  B_{ss'}^{a+} = p(a\mid ss')  =B_{ss'}^a
+  \end{aligned}
+  \end{equation*}
+
+  Which implies that $B^a = B^{a+}$ since all of their entries are
+  equal.
+
+  **The Questions**: The six questions, first stated on line 46, are very
+  confusing. Firstly, they're stated in different terms several times,
+  which is confusing on its own. Why not list the questions only once,
+  in the most intuitive way? Moreover, the questions are too complicated
+  individually. I think it would be much clearer if you don't state all
+  of these questions explicitly, and rather prove the answers as
+  theorems/lemmas/propositions. It's very hard to remember which
+  question is which as you go through the text, and it's actually very
+  hard to digest what the paper is trying to do with such a dense list
+  of questions. In my opinion, the motivation for the paper is clear
+  enough on its own, and I don't think it'll be difficult to convince
+  most readers that understanding these inverse models is an important
+  task. But when the exact meaning of "understanding" is stated so
+  verbosely, it actually detracts from the clarity of the paper. One
+  example that is particularly confusing appears on line 139, where it
+  says "Questions (i) - (vi) also have multiple variations", followed by
+  a list of three questions. How do you go from 6 questions to 3, which
+  correspond to which? Now you're actually assuming that the reader will
+  recall at least 9 questions.
+
+  Moreover, if you must include these questions, it would be
+  tremendously more convenient if they can be hyperlinked.
+
+  **Line 149**: Another rephrasing of the questions here says
+
+  > One way to rephrase the questions is whether $f(M) = f(W)$
+  > implies $M=W$ or $g(M) = g(W)$ for all (or most or some)
+  > $M$ and $W$.
+
+  I don't understand this question at all. The property that $f(M) =
+  f(W)\implies M = W$ is more a property of the function $f$ than the
+  objects $M,W$. Indeed, this property is known as
+  "injectivity". Likewise, "whether $f(M) = f(W)$ implies $g(M) = g(W)$"
+  is also highly dependent on the particular properties of
+  $f,g$. Currently $f,g$ are only assumed to be arbitrary functions, so
+  it is really unclear to me what the purpose of this question is. I had
+  a clearer understanding of the questions before reading this.
+
+  **Equations (8) and (9)**: Surely the notation can be improved here, it
+  is extremely difficult to parse. Why not use product notation
+  ($\prod$)? Also, in equation (9), what is $B^{a+\dots+}$? Are there
+  $i$ dots? Back to my previous comment, I believe $B^{a+\dots+}\equiv
+  B^a$ unless there's an inconsistency in the notation.
+
+  Later, on line 161, the term $\text{EqIM(1)}$ is mentioned, but where
+  is that defined? Only equations $\text{EqIM}(ia)$ and
+  $\text{EqIM}(i+)$ are defined.
+
+  **Example violating (i, iii, v)**: It appears that what you're showing
+  is that for random variables $X, Y$ distributed by $\mu_X, \mu_Y$,
+  there may exist several distinct random variables $(X, Y)$ with
+  marginals $\mu_X, \mu_Y$. This is well known.
+
+  **Line 169**: I don't understand how this relates to (i), (iii), (v) at
+  all. You're assuming that two MDPs encoded by $M,W$ have the same
+  transition dynamics, and then based on that, the ability to infer
+  multistep models from fewer-step models is guaranteed? Something is
+  missing here. How does $W$ fit in?
+
+  **Line 171**: It says "Note that $M_{ss'}^a\equiv p(s'\mid sa)$
+  independent of $a$ implies $M_{s+}^a$ independent of $a$..." -- this
+  is only true if it holds /for every pair/ $(s, s')$. Also, this whole
+  "degenerate case" is fairly trivial: $M$ and $W$ are only related via
+  $\pi(a\mid\cdot)$, so if they're both actually independent of $a$,
+  then of course any equality of this sort must imply that the MDPs are
+  identical.
+
+  **Line 175**: What does it mean for tensors to be "nearly independent"
+  of $a$?
+
+  **Line 178**: Similarly to the "independent of $a$" case, why is this
+  even an interesting case to study? As pointed out, the consequences
+  are fairly obvious.
+
+  Altogether, I didn't find section 3 to be very informative.
+
+  **Non-linear manifold**: On line 212, it says that $B^{aa'}$ forms a
+  non-linear manifold of dimension at least $d(d-k)$. But what is the
+  "dimension" of a non-linear manifold? Perhaps there is a definition
+  for this, but I doubt it's widely known to the Neurips audience. I'd
+  much prefer to have seen this definition in the background section in
+  place of the algebraic properties of tensors.
+
+  **Line 214**: I believe this logic is flawed. It says "... this now
+  gives an over-determined system which generally has no solution. But
+  by assumption, $M$ is a solution, which gives hope that there may be
+  only one or a finite number of solutions". What is being said here is
+  that the situation only makes sense if the "over-determinacy" is
+  redundant, so that it's not actually over-determined. This doesn't
+  give any hint about the number of solutions. There may very well be
+  infinitely-many solutions regardless of the fact that the system is
+  over-determined.
+
+  **Figure 1**: This figure is never mentioned in the text, it would be
+  nice to have some discussion of the results it's presenting.
+
+
+Minor issues
+============
+
+  **Contents section**: On line 88 "Appendix A" is mentioned, but then
+  subsequent appendices are written "(B)", for instance, which is a
+  little confusing.
+
+  **Matrix notation**: On line 105, it is written "Capital letters... are
+  used for $d\times d$ matrices over $[0;1]\subset\mathbf{R}$...".  Is
+  $[0;1]$ the closed unit interval? Why not write "Capital
+  letters... are used for matrices in $[0, 1]^{d\times d}$"?
+
+  **Tensor notation**: On line 109,
+
+  > Let $\odot$ denote element-wise (Hadamard)
+  > multiplication... and similarly $\oslash$, while (no)
+  > $\cdot$ represents (conventional) matrix multiplication
+  > and has operator preference over $\odot$ and $\oslash$.
+
+  I don't understand this at all. What is $\oslash$? What is $\cdot$?
+  I'm assuming that by "similarly $\oslash$" it is meant that $\oslash$
+  is element-wise division (this should be stated, because the sentence
+  doesn't make sense otherwise), and that $\cdot$ represents matrix
+  multiplication. But what does "while (no) $\cdot$" mean?
+
+  **Algebraic properties of tensors**: Does this really need to be
+  included here? It's hard to read math packed into a paragraph like
+  this. Also many of these properties are very intuitive (i.e., I think
+  just about every reader will have inuition for the $D\odot\text{Id}$
+  property without it being stated), and then some properties are highly
+  abstract (matrices form a ring...). I think it's fair to assume that
+  readers of this paper understand how to do algebra with matrices and
+  tensors, even if they don't know what a ring is.
+
+**Limitations**
+The authors have addressed the limitations of their methods.
+
+====================================================================================================
+PAIR 4 | GPT-4o | id=gpt-4o-batch-NeurIPS2021-5544-_3U37vs8xfz | NeurIPS2021 | rating='4: Ok but not good enough - rejection' | confidence='3'
+====================================================================================================
+**Summary**
+The paper titled 'Conformal Bayesian Computation' presents a novel approach for constructing conformal Bayesian predictive intervals that ensure finite sample calibration guarantees. The authors highlight the issue of Bayesian predictive intervals being poorly calibrated when the model is misspecified. They propose using 'add-one-in' importance sampling to efficiently generate conformal Bayesian predictive intervals, which contrasts with existing methods that require expensive model refitting or data-splitting. The paper further extends these ideas to hierarchical models and demonstrates the approach through various experiments, including sparse regression and hierarchical modeling scenarios. The authors claim their method provides computationally efficient conformal inference for Bayesian models, potentially serving as a diagnostic tool for Bayesian miscalibration.
+
+**Main Review**
+The paper addresses an important challenge in predictive modeling by combining Bayesian and conformal methods to create predictive intervals that maintain frequentist coverage guarantees. The authors provide a thorough background on Bayesian prediction and conformal inference, motivating the need for an approach that ensures calibration even under model misspecification. The methodology of using 'add-one-in' importance sampling shows some innovation and computational insight, particularly in avoiding the expensive refitting required in traditional conformal prediction methods. The empirical evaluations cover a range of scenarios, from sparse regression to hierarchical models, showcasing the approach's applicability. However, the paper falls short in several areas that weaken its impact. First, the clarity of the presentation could be improved. The technical sections are dense and could benefit from clearer explanations and visual aids to help readers grasp the methodology more intuitively. Although the experiments demonstrate the method's effectiveness, they lack a comprehensive comparison against a broader set of baseline methods. Additionally, the discussion on limitations and potential societal impacts is minimal. For instance, the paper does not address how its predictive intervals could inadvertently affect decision-making in sensitive areas if misapplied. Overall, while the idea of combining Bayesian and conformal methods is interesting, the execution in the paper suggests that the approach requires further refinement and clarity before it can be deemed a significant contribution to the field.
+
+**Limitations and Societal Impact**
+The authors briefly mention the computational limitations related to MCMC and importance sampling and acknowledge that their intervals are only approximate, which is a crucial limitation for practitioners relying on precise predictive intervals. However, they do not delve deeply into potential societal impacts, especially considering the application of predictive intervals in decision-critical areas such as healthcare or finance. The framework's reliance on Bayesian models means that any biases inherent in the prior distributions or likelihood can propagate through the system, potentially leading to unfair or biased outcomes in practice. The inclusion of a discussion on this aspect, along with strategies to mitigate potential adverse implications, would have strengthened the paper's responsible research practice.
+
+====================================================================================================
+PAIR 4 | HUMAN | id=human-NeurIPS2021-5544-_3U37vs8xfz | NeurIPS2021 | rating='4: Ok but not good enough - rejection' | confidence='4: You are confident in your assessment, but not absolutely certain. It is unlikely, but not impossible, that you did not understand some parts of the submission or that you are unfamiliar with some pieces of related work.'
+====================================================================================================
+**Summary**
+The authors develop a fast conformal Bayesian computation approach.  The original conformal prediction method can be computationally intensive:  It often requires refitting the model for every augmented value y. The authors avoid this refitting step by using importance sampling. The authors also show the extension to conditionally exchangeable data, which is especially useful for hierarchical data. The resulted conformal interval has finite sample correct coverage and is immune to model misspecification or distribution assumptions.
+
+**Main Review**
+The paper is well structured and easy to follow. I also agree with the authors that prediction calibration is crucial in the M-open world, which is arguable always the case. The prospered conformal Bayesian computation method sheds some light on this direction. 
+
+However, I am concerned about whether the novelty of the proposed method can be distinguishable from its existing building blocks. Conformal inference/distribution-free Predictive Inference—and thereby the main algorithm considered in this paper—are not new ideas. It is also not a new idea to use (regularized) importance sampling to avoid model refitting and obtain posterior integrals in the context of either the leave-data-out (LOO) or the add-one-data-in (AOI, e.g. Bürkner et al. 2020 used this importance-sampling-AOI idea in time series).  It appears the only methodology contribution this paper is making is to apply the importance sampling strategy to the model refitting step in conformal Bayesian inference. I am not convinced that such incremental contribution would grant a publication. 
+
+In terms of its practical usefulness, I have two concerns. First, throughout the paper, the authors seem to emphasize the situation in which x_{n+1} is fixed. But this is not a typical perdition task in which we have a known x_{n+1}. In the words of Lei  (2018): “In some applications, where Xn+1 is not necessarily observed, prediction intervals are build by evaluating 1{y ∈ Cconf (x)} over all pairs of (x,y) on a fine grid“. Perhaps x_{n+1} can also be evaluated on a grid, but then that method is rather related to jackknife-conformal-inference, which itself can be computed by importance sampling.  
+
+Second, the “correct frequentist coverage” is a probabilistic statement averaged over all observed data and x_{n+1}. This does not mean the interval estimate derived from conformal Bayes is exact for y_{n+1} conditional on a fixed x_{n+1}, nor necessarily optimal for interval predictions (optimal in the sense of interval scoring rules). Think about the Jackknife case in which the bandwidth is a constant across x_i. I suggest the author clearly state the definition of frequentist coverage as not all audience in the machine learning community can immediately tell the subtle difference.
+
+Minor:
+* L-82: why is the rank normalized by n+1? I think the rank statistic should the integer. 
+
+* How is the grid of y chosen? Could you use Bayes prediction to design the grid?
+
+* What is the advantage of AOI against jackknife used in conformal Bayes? Is the only difference that IS-AOI is computationally easier than IS-LOO?
+
+* “The CB and Bayes methods have comparable run-times” I think it is misleading. CB can have an arbitrarily larger running time if x_{n+1} is evaluated at many values.
+
+* Overall, the experiment section is relatively weak. The sample sizes in all three examples are too small to reflect a modern big data challenge. It is not common to see all MCMC running time < 1 second from ML conferences.
+
+* L-336: I think “leverage” is the wrong concept here. The leverage only depends on x. Here you have the influence of y too.
+
+* "If only approximate posterior samples are available, e.g. through variational Bayes (VB), then an AOI scheme may still be feasible, where one includes an additional correction term in the IS weights for the VB approximation". I disagree. Note that Magnusson et al. (2019) are on the LOO of exact Bayes when there are only VB samples. In your context, you need not only adjust for the VB approximation for sigma_{n+1}, but also all sigma_{1}, ... sigma_{n} for lack of exact posteriors. Such a task is generally not feasible.
+
+**Limitations and Societal Impact**
+The  authors have adequately addressed potential negative societal impact of their work.
+I have listed more limitations in my main review.

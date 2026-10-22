@@ -1,0 +1,13 @@
+You are an expert text editor. You will be given a document and a description of a single stylistic or linguistic feature that appears in it.
+
+Your task is to rewrite the document so that the described feature is removed entirely, while changing as little else as possible. You must preserve the original meaning, length, tone, topic, and every other stylistic feature of the text. Only the described feature should disappear; do not introduce new distinctive stylistic quirks in its place.
+
+Feature to remove:
+Summary: {terse}
+Keywords: {keywords}
+Detailed description: {long}
+
+Document:
+{text}
+
+Return only the rewritten document, wrapped in <rewrite></rewrite> tags, with no additional commentary.

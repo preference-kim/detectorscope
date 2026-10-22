@@ -1,0 +1,167 @@
+{
+ "detector-scope-peer-review-gpt4o/main": {
+  "name": "detector-scope-peer-review-gpt4o",
+  "about": "Detects GPT-4o-written reviews of machine-learning papers (trained on the AI Peer Review Detection Benchmark, human reviews vs. GPT-4o reviews). Gemma-2-2b fine-tuned as a review classifier, sparse autoencoders fine-tuned on it, and a sparse logistic-regression head over their features.",
+  "extractor": " fine-tuned on these reviews",
+  "perf": [
+   [
+    "PRDB test, GPT-4o reviews",
+    "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/eval_results/PRDB_gpt4o",
+    "gpt4o"
+   ]
+  ],
+  "eval_dir": "logreg_gemma2",
+  "stats": "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/feature_stats/PRDB_train_gemma2_gpt4o_gpt4o_feature_stats.npz",
+  "variants": "Branches of this repo hold the paper's other two settings on the same data: `ft-sae` (the unmodified Gemma-2-2b with the fine-tuned SAEs) and `base-sae` (the unmodified Gemma-2-2b with the Gemma Scope SAEs). Load one with `revision=\"ft-sae\"` or `revision=\"base-sae\"`. The general-domain detector is [detector-scope](https://huggingface.co/liamdugan/detector-scope)."
+ },
+ "detector-scope-peer-review-gpt4o/ft-sae": {
+  "name": "detector-scope-peer-review-gpt4o (ft-sae)",
+  "about": "Detects GPT-4o-written reviews of machine-learning papers (trained on the AI Peer Review Detection Benchmark, human reviews vs. GPT-4o reviews). The unmodified Gemma-2-2b, sparse autoencoders fine-tuned on these reviews, and a sparse logistic-regression head over their features.",
+  "extractor": "",
+  "perf": [
+   [
+    "PRDB test, GPT-4o reviews",
+    "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/eval_results/PRDB_gpt4o",
+    "gpt4o"
+   ]
+  ],
+  "eval_dir": "logreg_base_gemma2",
+  "stats": "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/feature_stats/PRDB_train_base_gemma2_gpt4o_feature_stats.npz",
+  "variants": "Branches of this repo hold the paper's other two settings on the same data: `main` (Gemma-2-2b fine-tuned as a review classifier, the recommended one) and `base-sae` (the unmodified Gemma-2-2b with the Gemma Scope SAEs). Load one with `revision=\"base-sae\"`. The general-domain detector is [detector-scope](https://huggingface.co/liamdugan/detector-scope)."
+ },
+ "detector-scope-peer-review-gpt4o/base-sae": {
+  "name": "detector-scope-peer-review-gpt4o (base-sae)",
+  "about": "Detects GPT-4o-written reviews of machine-learning papers (trained on the AI Peer Review Detection Benchmark, human reviews vs. GPT-4o reviews). The unmodified Gemma-2-2b with the unmodified Gemma Scope sparse autoencoders, and a sparse logistic-regression head over their features.",
+  "extractor": "",
+  "perf": [
+   [
+    "PRDB test, GPT-4o reviews",
+    "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/eval_results/PRDB_gpt4o",
+    "gpt4o"
+   ]
+  ],
+  "eval_dir": "logreg_gemmascope",
+  "stats": "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/feature_stats/PRDB_train_gemmascope_gpt4o_feature_stats.npz",
+  "variants": "Branches of this repo hold the paper's other two settings on the same data: `main` (Gemma-2-2b fine-tuned as a review classifier, the recommended one) and `ft-sae` (the unmodified Gemma-2-2b with the fine-tuned SAEs). Load one with `revision=\"ft-sae\"`. The general-domain detector is [detector-scope](https://huggingface.co/liamdugan/detector-scope)."
+ },
+ "detector-scope-peer-review-llama/main": {
+  "name": "detector-scope-peer-review-llama",
+  "about": "Detects Llama-written reviews of machine-learning papers (trained on the AI Peer Review Detection Benchmark, human reviews vs. Llama reviews). Gemma-2-2b fine-tuned as a review classifier, sparse autoencoders fine-tuned on it, and a sparse logistic-regression head over their features.",
+  "extractor": " fine-tuned on these reviews",
+  "perf": [
+   [
+    "PRDB test, Llama reviews",
+    "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/eval_results/PRDB_llama",
+    "llama"
+   ]
+  ],
+  "eval_dir": "logreg_gemma2",
+  "stats": "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/feature_stats/PRDB_train_gemma2_llama_llama_feature_stats.npz",
+  "variants": "Branches of this repo hold the paper's other two settings on the same data: `ft-sae` (the unmodified Gemma-2-2b with the fine-tuned SAEs) and `base-sae` (the unmodified Gemma-2-2b with the Gemma Scope SAEs). Load one with `revision=\"ft-sae\"` or `revision=\"base-sae\"`. The general-domain detector is [detector-scope](https://huggingface.co/liamdugan/detector-scope)."
+ },
+ "detector-scope-peer-review-llama/ft-sae": {
+  "name": "detector-scope-peer-review-llama (ft-sae)",
+  "about": "Detects Llama-written reviews of machine-learning papers (trained on the AI Peer Review Detection Benchmark, human reviews vs. Llama reviews). The unmodified Gemma-2-2b, sparse autoencoders fine-tuned on these reviews, and a sparse logistic-regression head over their features.",
+  "extractor": "",
+  "perf": [
+   [
+    "PRDB test, Llama reviews",
+    "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/eval_results/PRDB_llama",
+    "llama"
+   ]
+  ],
+  "eval_dir": "logreg_base_gemma2",
+  "stats": "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/feature_stats/PRDB_train_base_gemma2_llama_feature_stats.npz",
+  "variants": "Branches of this repo hold the paper's other two settings on the same data: `main` (Gemma-2-2b fine-tuned as a review classifier, the recommended one) and `base-sae` (the unmodified Gemma-2-2b with the Gemma Scope SAEs). Load one with `revision=\"base-sae\"`. The general-domain detector is [detector-scope](https://huggingface.co/liamdugan/detector-scope)."
+ },
+ "detector-scope-peer-review-llama/base-sae": {
+  "name": "detector-scope-peer-review-llama (base-sae)",
+  "about": "Detects Llama-written reviews of machine-learning papers (trained on the AI Peer Review Detection Benchmark, human reviews vs. Llama reviews). The unmodified Gemma-2-2b with the unmodified Gemma Scope sparse autoencoders, and a sparse logistic-regression head over their features.",
+  "extractor": "",
+  "perf": [
+   [
+    "PRDB test, Llama reviews",
+    "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/eval_results/PRDB_llama",
+    "llama"
+   ]
+  ],
+  "eval_dir": "logreg_gemmascope",
+  "stats": "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/feature_stats/PRDB_train_gemmascope_llama_feature_stats.npz",
+  "variants": "Branches of this repo hold the paper's other two settings on the same data: `main` (Gemma-2-2b fine-tuned as a review classifier, the recommended one) and `ft-sae` (the unmodified Gemma-2-2b with the fine-tuned SAEs). Load one with `revision=\"ft-sae\"`. The general-domain detector is [detector-scope](https://huggingface.co/liamdugan/detector-scope)."
+ },
+ "detector-scope/main": {
+  "name": "detector-scope",
+  "about": "Detects AI-generated text across domains and generators (trained on the COLING 2025 GenAI Detection shared task: news, essays, reviews and more, written by people or by 40 language models). The unmodified Gemma-2-2b, sparse autoencoders fine-tuned on this data, and a sparse logistic-regression head over their features: the best general-domain detector of the paper.",
+  "extractor": "",
+  "perf": [
+   [
+    "COLING dev",
+    "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/eval_results/COLING_dev",
+    "all"
+   ],
+   [
+    "COLING dev-test",
+    "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/eval_results/COLING_devtest",
+    "all"
+   ],
+   [
+    "COLING test",
+    "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/eval_results/COLING_test",
+    "all"
+   ]
+  ],
+  "eval_dir": "logreg_base_gemma2",
+  "stats": "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/feature_stats/COLING_train_base_gemma2_coling_feature_stats.npz",
+  "variants": "Branches of this repo hold the paper's other two settings on the same data: `ft-model-sae` (Gemma-2-2b fine-tuned as a classifier, with SAEs fine-tuned on it) and `base-sae` (the unmodified Gemma-2-2b with the Gemma Scope SAEs). Load one with `revision=\"ft-model-sae\"` or `revision=\"base-sae\"`. For reviews of machine-learning papers use [detector-scope-peer-review-gpt4o](https://huggingface.co/liamdugan/detector-scope-peer-review-gpt4o) or [detector-scope-peer-review-llama](https://huggingface.co/liamdugan/detector-scope-peer-review-llama)."
+ },
+ "detector-scope/ft-model-sae": {
+  "name": "detector-scope (ft-model-sae)",
+  "about": "Detects AI-generated text across domains and generators (trained on the COLING 2025 GenAI Detection shared task: news, essays, reviews and more, written by people or by 40 language models). Gemma-2-2b fine-tuned as a classifier on this data, sparse autoencoders fine-tuned on it, and a sparse logistic-regression head over their features.",
+  "extractor": " fine-tuned on this data",
+  "perf": [
+   [
+    "COLING dev",
+    "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/eval_results/COLING_dev",
+    "all"
+   ],
+   [
+    "COLING dev-test",
+    "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/eval_results/COLING_devtest",
+    "all"
+   ],
+   [
+    "COLING test",
+    "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/eval_results/COLING_test",
+    "all"
+   ]
+  ],
+  "eval_dir": "logreg_gemma2",
+  "stats": "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/feature_stats/COLING_train_gemma2_coling_feature_stats.npz",
+  "variants": "Branches of this repo hold the paper's other two settings on the same data: `main` (the unmodified Gemma-2-2b with SAEs fine-tuned on this data, the recommended one) and `base-sae` (the unmodified Gemma-2-2b with the Gemma Scope SAEs). Load one with `revision=\"base-sae\"`. For reviews of machine-learning papers use [detector-scope-peer-review-gpt4o](https://huggingface.co/liamdugan/detector-scope-peer-review-gpt4o) or [detector-scope-peer-review-llama](https://huggingface.co/liamdugan/detector-scope-peer-review-llama)."
+ },
+ "detector-scope/base-sae": {
+  "name": "detector-scope (base-sae)",
+  "about": "Detects AI-generated text across domains and generators (trained on the COLING 2025 GenAI Detection shared task: news, essays, reviews and more, written by people or by 40 language models). The unmodified Gemma-2-2b with the unmodified Gemma Scope sparse autoencoders and a sparse logistic-regression head over their features.",
+  "extractor": "",
+  "perf": [
+   [
+    "COLING dev",
+    "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/eval_results/COLING_dev",
+    "all"
+   ],
+   [
+    "COLING dev-test",
+    "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/eval_results/COLING_devtest",
+    "all"
+   ],
+   [
+    "COLING test",
+    "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/eval_results/COLING_test",
+    "all"
+   ]
+  ],
+  "eval_dir": "logreg_gemmascope",
+  "stats": "/vast/projects/ccb/lab/ldugan/interpretable_ai_detectors/outputs/logreg_sgd_l1_ablation/feature_stats/COLING_train_gemmascope_coling_feature_stats.npz",
+  "variants": "Branches of this repo hold the paper's other two settings on the same data: `main` (the unmodified Gemma-2-2b with SAEs fine-tuned on this data, the recommended one) and `ft-model-sae` (Gemma-2-2b fine-tuned as a classifier, with SAEs fine-tuned on it). Load one with `revision=\"ft-model-sae\"`. For reviews of machine-learning papers use [detector-scope-peer-review-gpt4o](https://huggingface.co/liamdugan/detector-scope-peer-review-gpt4o) or [detector-scope-peer-review-llama](https://huggingface.co/liamdugan/detector-scope-peer-review-llama)."
+ }
+}

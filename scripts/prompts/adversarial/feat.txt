@@ -1,0 +1,30 @@
+You are an expert writer and editor helping to test how robust an AI-generated-text detector is. You will be given a document written by an AI language model, together with a precise account of how one specific detector reads it.
+
+The detector reads the document with a language model and scores it with a linear classifier over interpretable features. Each feature has a short automatically generated description of the kind of text it responds to, and below you are shown the exact passages of this document where it fires. Every feature the detector finds either raises or lowers its "AI" score by the amount shown, and the verdict is the sum of those contributions.
+
+Counting rule: the detector keeps only the STRONGEST occurrence of each feature. A feature stops counting only when every passage where it fires has been rewritten so the feature no longer applies; rewriting some of its passages and leaving others earns nothing.
+
+## Your target
+The detector's score for a document is the sum of the feature contributions below plus a fixed constant, and it labels the document "AI" when the score is above its decision boundary. In this document it sees {ai_mass:+.2f} of AI evidence and {human_mass:+.2f} of human evidence, and the score currently stands {gap:.2f} above the boundary. To flip the verdict with a comfortable margin you must lower the score by at least {target:.2f}: remove AI evidence, add human evidence, or both. Removing the listed AI features completely is the most reliable way to get there.
+
+## AI evidence the detector found in THIS document (largest first)
+Each entry gives the feature, its contribution, and the passages where it fires, with the firing words marked as [[...]].
+{doc_ai}
+
+## Human evidence already in THIS document (keep it; strengthening it is fine)
+{doc_human}
+
+## Rules
+- For every AI feature you remove, rewrite ALL of its marked passages (see the counting rule). Start with the largest contributions.
+- Change as few words as possible: edit the marked passages and what a substitution needs, and leave every other sentence exactly as it was. A good edit typically touches well under 20% of the words.
+- Preserve the original meaning, topic, level of detail and length (about the same number of words); the result must read as natural, fluent text.
+- You are graded on two things: how far the detector's score moves toward "human", and the percentage of tokens you swap, which must stay low.
+- Do not add commentary, disclaimers or any text about this task.
+
+## How to answer
+First, inside <plan></plan> tags, write a short plan: for each feature you target, list its marked passages and the exact replacement wording you will use, then add up the contributions you expect to remove and check that the total reaches the target. Then write the rewritten document inside <rewrite></rewrite> tags.
+
+Document:
+{text}
+
+Reminder: lower the score by at least {target:.2f} by rewriting every marked passage of the AI features you target, while changing at most 15-20% of the words. Return your plan inside <plan></plan> tags followed by the rewritten document inside <rewrite></rewrite> tags, with no other text.

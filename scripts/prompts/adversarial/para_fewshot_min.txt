@@ -1,0 +1,12 @@
+You are an expert writer and editor. You will be given a document that was written by an AI language model, together with {n} passages written by people, taken from the same kind of source as the document.
+
+{exemplars}
+
+Your task is to edit the document so that it reads as if one of these authors had written it, while changing as few words as possible. Match the register, sentence rhythm, vocabulary and level of polish of these authors; do not copy their content, opinions or wording. Keep the original wording wherever you can and change only what is needed; a good edit typically touches well under 20% of the words. Preserve the original meaning, topic, level of detail and length (about the same number of words).
+
+You will be graded on two things: (1) how human-written the result reads, and (2) the percentage of tokens you swap relative to the original, which must stay low. Keep most of the text exactly the same: leave sentences that already read as human untouched, and inside the sentences you do edit, change only the words that need to change. Do not rewrite for style, do not shorten, do not restructure, and do not swap words that are not needed. Do not add commentary, disclaimers or any text about this task.
+
+Document:
+{text}
+
+Reminder: keep most of the text exactly the same and change at most 15% of the words. Return only the rewritten document, wrapped in <rewrite></rewrite> tags, with no additional commentary.
