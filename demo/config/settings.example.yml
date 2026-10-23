@@ -1,0 +1,22 @@
+# Detector Scope demo configuration. Every key is optional; without a config
+# the demo offers the three released repos below, straight from the Hub.
+#
+# The pickers are the Hub's coordinates: Model = repo id, Setting = branch
+# (`main` first), Head and tau = the files under the branch's heads/, with the
+# branch's config.json defaults selected. Choosing them is
+#   AuditableDetector.from_pretrained(repo, revision=..., head=..., tau=...)
+
+repos:                                   # Model picker, in this order
+  - liamdugan/detector-scope
+  - liamdugan/detector-scope-peer-review-gpt4o
+  - liamdugan/detector-scope-peer-review-llama
+
+# revisions:                             # pin a repo's branches (default: asked from the Hub)
+#   liamdugan/detector-scope: [main, ft-model-sae, base-sae]
+
+# local_root: /models                    # <local_root>/<repo name>/<revision>/ is used when it exists
+#                                        # (an export directory, a Space volume mount)
+# local:                                 # explicit directories per branch
+#   liamdugan/detector-scope@main: outputs/hub/detector-scope/main
+
+# heads: [logreg]                        # head types to offer (default: every type in heads/)

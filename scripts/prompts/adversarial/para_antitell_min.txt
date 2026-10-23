@@ -1,0 +1,19 @@
+You are an expert writer and editor. You will be given a document that was written by an AI language model.
+
+Your task is to edit the document so that it reads as if it had been written by a human, while changing as few words as possible. Keep the original wording wherever you can and change only what is needed to make the text read as human-written; a good edit typically touches well under 20% of the words. Preserve the original meaning, topic, level of detail and length (about the same number of words).
+
+Follow these rules, which remove the habits that give machine-written text away:
+1. Do not open a sentence with a transition word or phrase (Furthermore, Additionally, Moreover, Ultimately, Overall, Finally, In conclusion, Notably, Importantly).
+2. Do not end with a sentence that summarises, generalises or looks ahead.
+3. Vary sentence length deliberately: mix very short sentences with long ones, and never write several sentences of similar length in a row.
+4. Avoid stock vocabulary such as delve, crucial, vital, essential, pivotal, landscape, comprehensive, robust, leverage, foster, navigate, testament, tapestry, underscore, showcase, seamless, multifaceted.
+5. Do not introduce lists of examples with "such as" or "for instance", and do not write three-item parallel lists.
+6. Do not add headers, labels, bullet points or paragraph breaks that the original does not have.
+Contractions, first person, hedges, asides and plain everyday words are welcome.
+
+You will be graded on two things: (1) how human-written the result reads, and (2) the percentage of tokens you swap relative to the original, which must stay low. Keep most of the text exactly the same: leave sentences that already read as human untouched, and inside the sentences you do edit, change only the words that need to change. Do not rewrite for style, do not shorten, do not restructure, and do not swap words that are not needed. Do not add commentary, disclaimers or any text about this task.
+
+Document:
+{text}
+
+Reminder: keep most of the text exactly the same and change at most 15% of the words. Return only the rewritten document, wrapped in <rewrite></rewrite> tags, with no additional commentary.

@@ -3,6 +3,17 @@ __pycache__/
 *.py[cod]
 *$py.class
 
+# Folders
+activations/
+/data/
+logs/
+slurm/
+/models/
+tensorboard/
+checkpoints/
+/outputs/
+/figures/
+
 # Distribution / packaging
 .Python
 build/
@@ -22,3 +33,22 @@ share/python-wheels/
 .installed.cfg
 *.egg
 MANIFEST
+*.ipynb_checkpoints
+.vscode
+*.code-workspace
+
+# Other
+demo/TIPS.md
+demo/config/*
+!demo/config/settings.example.yml
+scripts/scratch
+eval_results
+# release: never publish
+paper/
+paper_logos/
+.claude/
+notes/
+
+# tool caches
+.pytype/
+requirements-lock.txt

@@ -1,0 +1,10 @@
+You are an expert writer and editor. You will be given a document that was written by an AI language model, together with {n} passages written by people, taken from the same kind of source as the document.
+
+{exemplars}
+
+Your task is to rewrite the document so that it reads as if one of these authors had written it. Match the register, sentence rhythm, vocabulary and level of polish of these authors; do not copy their content, opinions or wording. Preserve the original meaning, topic and level of detail. You may restructure sentences, change vocabulary and adjust the tone freely. Do not add commentary, disclaimers or any text about this task.
+
+Document:
+{text}
+
+Return only the rewritten document, wrapped in <rewrite></rewrite> tags, with no additional commentary.
