@@ -252,13 +252,22 @@ publishes the Space.
 ## Citation
 
 ```bibtex
-@misc{dugan2026detectorscope,
-  title={Building Auditable AI Text Detectors with Sparse Autoencoders},
-  author={Liam Dugan and Callum McDougall and Matthew Denton and Phillip Pham and Christine Kaeser-Chen and Chris Callison-Burch},
-  year={2026},
-  eprint={2610.30006},
-  archivePrefix={arXiv},
-  url={https://arxiv.org/abs/2610.30006},
+@inproceedings{dugan-etal-2026-building,
+    title = "Building Auditable {AI} Text Detectors with Sparse Autoencoders",
+    author = "Dugan, Liam  and
+      McDougall, Callum Stuart  and
+      Denton, Matthew  and
+      Pham, Philip  and
+      Kaeser-Chen, Christine  and
+      Callison-Burch, Chris",
+    booktitle = "Proceedings of the 2026 Conference on Empirical Methods in Natural Language Processing",
+    month = oct,
+    year = "2026",
+    address = "Budapest, Hungary",
+    publisher = "Association for Computational Linguistics",
+    url = "https://aclanthology.org/2026.emnlp-main.762/",
+    pages = "17640--17689",
+    ISBN = "979-8-89176-459-0",
 }
 ```
 
