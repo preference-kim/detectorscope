@@ -25,6 +25,43 @@
 DetectorScope turns a black-box AI text detector into one whose every
 prediction is a sum of named, validated features. It can tell you which properties of a text made it predict "AI" and where in the text they are located.
 
+## About this fork
+
+I'm a Mac user. I wanted DetectorScope to be practical for everyday document
+checks without CUDA. This fork focuses on usable CPU and Apple Silicon/MPS
+performance, with manageable memory use.
+
+Against our [historical full-model CPU run](docs/mac-inference.md#historical-cpu-reference),
+the fork's CPU path was **at least 8× faster at P50** and used **under one-sixth
+the peak process RSS** in FP32 batch-1 tests with 256–1,024 input tokens.
+
+See [About this fork](docs/mac-inference.md) for the model, test environment,
+joint batch-size/input-length benchmarks, current constraints and TODOs.
+
+### Mac quick start
+
+Install this fork to use the bounded weight-streaming path:
+
+```bash
+git clone https://github.com/preference-kim/detectorscope.git
+cd detectorscope
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -e ".[mac]"
+detectorscope serve --device mps --dtype float32 --batch-size 2
+```
+
+Use `--device cpu` for CPU execution. The first start downloads the pinned
+checkpoint; subsequent starts can use `--local-files-only`.
+
+In another terminal with the same environment activated:
+
+```bash
+detectorscope check path/to/document.md --highlights
+```
+
+The upstream project overview and API examples follow below.
+
 
 <p align="center">
   Try our demo! <a href="https://huggingface.co/spaces/liamdugan/detector-scope-demo"><b>🤗 https://huggingface.co/spaces/liamdugan/detector-scope-demo</b></a>
@@ -135,9 +172,9 @@ black-box classifier they are built on. The full tables are in the
 
 ---
 
-## Installation
+## Upstream installation
 
-From PyPI, in a fresh environment:
+For the upstream package from PyPI, in a fresh environment:
 
 ```bash
 python -m venv .venv && source .venv/bin/activate

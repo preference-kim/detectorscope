@@ -22,9 +22,14 @@ project read block inputs, hence the `<module>_input` naming of hook points.
 
 import contextlib
 import functools
+import re
 
 import torch
 import transformers
+
+
+class _ActivationsComplete(Exception):
+  """Internal early return after the last requested block input is captured."""
 
 
 class HFExtractor:
@@ -85,7 +90,10 @@ class HFExtractor:
     return functools.reduce(getattr, name.split("."), self.model)
 
   @contextlib.contextmanager
-  def apply_hooks(self, hooks: list[str] | None, detach=True, to_cpu=True):
+  def apply_hooks(
+      self, hooks: list[str] | None, detach=True, to_cpu=True,
+      stop_after_last_hook: bool = False,
+  ):
     """Registers forward hooks on the named modules for the enclosed block.
 
     Each hook stores the module's first positional input in
@@ -96,6 +104,8 @@ class HFExtractor:
       hooks: module names to hook; None or empty uses `self.default_hooks`.
       detach: detach captured tensors from the autograd graph.
       to_cpu: move captured tensors to the cpu as they are captured.
+      stop_after_last_hook: capture Gemma-2 block inputs with pre-hooks and
+        stop before executing the last requested block. Inference only.
 
     Raises:
       ValueError: if the extractor was loaded in tokenizer-only mode.
@@ -106,26 +116,41 @@ class HFExtractor:
     if not hooks:
       hooks = self.default_hooks
 
+    stop_at = None
+    if stop_after_last_hook:
+      if self.model.training:
+        raise ValueError("Early extraction requires model.eval().")
+      if self.config.model_type != "gemma2" or not hooks or any(
+          re.fullmatch(r"model\.layers\.\d+", name) is None for name in hooks
+      ):
+        raise ValueError("Early extraction supports Gemma-2 block inputs only.")
+      stop_at = max(hooks, key=lambda name: int(name.rsplit(".", 1)[1]))
+
     handles = []
-    for hook_name in hooks:
-      # NOTE: We re-define this fn within the loop to allow each hook_fn
-      #       to have a different default hook_name argument
-      def hook_fn(module, input_embed, output_embed, hook=hook_name):
-        del module, output_embed  # Unused.
-        if isinstance(input_embed, tuple):
-          input_embed = (
-              input_embed[0] if input_embed else torch.tensor(input_embed)
-          )
-        if detach:
-          input_embed = input_embed.detach()
-        if to_cpu:
-          input_embed = input_embed.cpu()
-        self.captured_activation[hook + "_input"] = input_embed
-
-      if module := self.string_to_module(hook_name):
-        handles.append(module.register_forward_hook(hook_fn))
-
     try:
+      for hook_name in hooks:
+        def capture(input_embed, hook=hook_name):
+          if detach:
+            input_embed = input_embed.detach()
+          if to_cpu:
+            input_embed = input_embed.cpu()
+          self.captured_activation[hook + "_input"] = input_embed
+
+        module = self.string_to_module(hook_name)
+        if stop_after_last_hook:
+          def pre_hook(module, args, kwargs, hook=hook_name, save=capture):
+            del module
+            save(args[0] if args else kwargs["hidden_states"])
+            if hook == stop_at:
+              raise _ActivationsComplete
+          handles.append(module.register_forward_pre_hook(
+              pre_hook, with_kwargs=True
+          ))
+        else:
+          def post_hook(module, args, output, save=capture):
+            del module, output
+            save(args[0] if args else torch.tensor(args))
+          handles.append(module.register_forward_hook(post_hook))
       yield
     finally:
       for handle in handles:
@@ -153,6 +178,7 @@ class HFExtractor:
       hooks: list[str] | None = None,
       return_mask: bool = False,
       on_device: bool = False,
+      stop_after_last_hook: bool = False,
   ) -> dict[str, torch.Tensor] | tuple[dict[str, torch.Tensor], torch.Tensor]:
     """Runs text through the LLM to extract token activations.
 
@@ -164,6 +190,7 @@ class HFExtractor:
         in batched extraction.
       on_device: keep extracted tensors on the model's device instead of
         moving them to the cpu.
+      stop_after_last_hook: skip the unused tail and output head (Gemma-2).
 
     Returns:
       `{f"{hook}_input": tensor}` with tensors of shape
@@ -179,7 +206,10 @@ class HFExtractor:
     self.captured_activation = {}
     is_batch = isinstance(text, (list, tuple))
 
-    with self.apply_hooks(hooks, to_cpu=(not on_device)):
+    with self.apply_hooks(
+        hooks, to_cpu=(not on_device),
+        stop_after_last_hook=stop_after_last_hook,
+    ):
       inputs = self.tokenizer(
           text,
           padding=is_batch,
@@ -188,9 +218,20 @@ class HFExtractor:
           return_tensors="pt",
       ).to(self.device)
 
-      self.model(
-          input_ids=inputs["input_ids"], attention_mask=inputs["attention_mask"]
-      )
+      kwargs = {"use_cache": False} if stop_after_last_hook else {}
+      try:
+        self.model(
+            input_ids=inputs["input_ids"],
+            attention_mask=inputs["attention_mask"], **kwargs
+        )
+      except _ActivationsComplete:
+        if not stop_after_last_hook:
+          raise
+
+    if stop_after_last_hook:
+      expected = {f"{hook}_input" for hook in (hooks or self.default_hooks)}
+      if set(self.captured_activation) != expected:
+        raise RuntimeError("Not all requested block inputs were captured.")
 
     if return_mask:
       mask = inputs["attention_mask"]

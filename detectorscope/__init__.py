@@ -19,6 +19,14 @@ AuditableDetector.from_pretrained(repo)(text) scores a text with a released
 detector; the pipeline stages run as python -m detectorscope.<stage>.
 """
 
-from detectorscope.model.detectors.auditable import AuditableDetector
-from detectorscope.model.detectors.auditable import Detection
-from detectorscope.model.detectors.auditable import Feature
+__all__ = ["AuditableDetector", "Detection", "Feature"]
+
+
+def __getattr__(name):
+  # The HTTP client and --help do not need to initialize PyTorch/Transformers.
+  if name in __all__:
+    from detectorscope.model.detectors import auditable
+    value = getattr(auditable, name)
+    globals()[name] = value
+    return value
+  raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -1,0 +1,276 @@
+from types import SimpleNamespace
+import json
+
+import pytest
+import safetensors.torch
+import torch
+from tokenizers import Tokenizer, models, pre_tokenizers, processors
+from transformers import Gemma2Config, Gemma2ForCausalLM, PreTrainedTokenizerFast
+
+from detectorscope.documents import DocumentAnalyzer, split_document
+from detectorscope.inference import OptimizedDetector, _SelectedEncoder
+from detectorscope.model.detectors.auditable import AuditableDetector, Detection
+from detectorscope.model.detectors.heads.logreg import LogRegHead
+from detectorscope.model.extractor import HFExtractor
+from detectorscope.model.sae import JumpReLUSAE
+from detectorscope.streaming import StreamingExtractor, TensorReader
+
+
+@pytest.fixture
+def tokenizer():
+  vocab = {"[PAD]": 0, "[UNK]": 1, "[BOS]": 2}
+  vocab.update({f"word{i}": i + 3 for i in range(60)})
+  tok = Tokenizer(models.WordLevel(vocab, unk_token="[UNK]"))
+  tok.pre_tokenizer = pre_tokenizers.Whitespace()
+  tok.post_processor = processors.TemplateProcessing(
+      single="[BOS] $A", special_tokens=[("[BOS]", 2)]
+  )
+  return PreTrainedTokenizerFast(tokenizer_object=tok, pad_token="[PAD]",
+                                 unk_token="[UNK]", bos_token="[BOS]")
+
+
+@pytest.fixture
+def source(tmp_path, tokenizer):
+  torch.manual_seed(12)
+  config = Gemma2Config(vocab_size=64, hidden_size=32, intermediate_size=48,
+                        num_hidden_layers=4, num_attention_heads=4,
+                        num_key_value_heads=2, head_dim=8,
+                        max_position_embeddings=128, sliding_window=64,
+                        pad_token_id=0, bos_token_id=2, eos_token_id=1,
+                        attn_implementation="eager")
+  extractor = HFExtractor.__new__(HFExtractor)
+  extractor.config = config
+  extractor.model = Gemma2ForCausalLM(config).eval()
+  extractor.tokenizer = tokenizer
+  extractor.device = "cpu"
+  extractor.tokenizer_only = False
+  extractor.default_hooks = ["model.layers.1", "model.layers.3"]
+  extractor.captured_activation = {}
+  det = AuditableDetector(None, extractor.default_hooks, d_model=32, d_sae=12)
+  det.extractor = extractor
+  det.saes[1].use_pre_enc_bias = True
+  det.saes[1].b_dec.data.fill_(0.1)
+  weight = torch.zeros(1, 24)
+  weight[0, [1, 3, 8, 14, 20]] = torch.tensor([0.2, -0.3, 0.7, 0.5, -0.1])
+  path = str(tmp_path / "head.safetensors")
+  safetensors.torch.save_file({"weight": weight, "bias": torch.tensor([0.25])},
+                             path, metadata={"threshold": "0.4"})
+  head = LogRegHead(path)
+  head.interp_mask[3] = 0
+  det.add_head(head, *det.default)
+  det.feature_table = {i: {"description": {"terse": f"feature {i}"}}
+                       for i in range(24)}
+  return det
+
+
+def test_compact_scores_features_and_highlights(source):
+  texts = ["word1 word4 word9 word2", "word3", ""]
+  expected = source(texts, return_highlights=True)
+  runner = OptimizedDetector(source, "cpu")
+  actual = runner(texts, return_highlights=True, batch_size=2)
+  assert len(runner.feature_ids) == 4
+  assert sum(e.weight.numel() for e in runner.encoders) == 32 * 4
+  for before, after in zip(expected, actual):
+    assert after.logit == pytest.approx(before.logit, abs=2e-6)
+    assert after.label == before.label
+    assert after.tokens == before.tokens
+    a, b = {f.id: f for f in before.features}, {f.id: f for f in after.features}
+    assert a.keys() == b.keys()
+    for fid in a:
+      assert a[fid].description == b[fid].description
+      assert a[fid].importance == pytest.approx(b[fid].importance, abs=2e-6)
+      assert [t for t, _ in a[fid].highlights] == [t for t, _ in b[fid].highlights]
+      assert [v for _, v in a[fid].highlights] == pytest.approx(
+          [v for _, v in b[fid].highlights], abs=2e-6
+      )
+
+
+def test_tail_is_never_executed_and_hooks_removed(source):
+  def fail(*args):
+    raise AssertionError("Unused block ran")
+  source.extractor.model.model.layers[3].forward = fail
+  runner = OptimizedDetector(source, "cpu")
+  runner("word1 word2")
+  assert all(not m._forward_pre_hooks and not m._forward_hooks
+             for m in source.extractor.model.modules())
+
+
+def test_real_model_errors_propagate_and_hooks_are_removed(source):
+  def fail(*args, **kwargs):
+    raise RuntimeError("fixture model failure")
+  source.extractor.model.model.layers[0].forward = fail
+  runner = OptimizedDetector(source, "cpu")
+  with pytest.raises(RuntimeError, match="fixture model failure"):
+    runner("word1")
+  assert all(not m._forward_pre_hooks and not m._forward_hooks
+             for m in source.extractor.model.modules())
+
+
+def test_all_zero_head_and_empty_batch(source):
+  source.load_head().detector.weight.data.zero_()
+  runner = OptimizedDetector(source, "cpu")
+  assert runner([]) == []
+  output = runner("word1", return_highlights=True)
+  assert output.logit == pytest.approx(0.25)
+  assert output.features == []
+
+
+def test_selected_encoder_threshold_boundary_and_pre_bias():
+  sae = JumpReLUSAE(2, 3)
+  sae.W_enc.data.copy_(torch.tensor([[1., 0., 1.], [0., 1., 1.]]))
+  sae.b_enc.data.zero_()
+  sae.log_threshold.data.zero_()
+  sae.use_pre_enc_bias = True
+  sae.b_dec.data.fill_(0.1)
+  x = torch.tensor([[1.1, 0.1], [1.1001, 0.1], [1.0999, 0.1]])
+  selected = torch.tensor([0, 2])
+  torch.testing.assert_close(_SelectedEncoder(sae, selected)(x),
+                             sae.encode(x)[:, selected], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize("text", ["", " ", "word1 " * 2100,
+                                  "한글과 emoji 👩🏽‍💻\nword1 " * 80])
+def test_windows_cover_every_character(text, tokenizer):
+  windows = split_document(text, tokenizer, max_tokens=32)
+  assert "".join(w.text for w in windows) == text
+  assert all(w.tokens <= 32 and text[w.start:w.end] == w.text for w in windows)
+
+
+def test_cache_reuses_exact_windows_but_rechecks_edits(tokenizer):
+  class FakeDetector:
+    extractor = SimpleNamespace(tokenizer=tokenizer)
+    identity = {"revision": "fixture"}
+    calls = 0
+
+    def __call__(self, texts, **kwargs):
+      self.calls += len(texts)
+      return [Detection(0.2, 0.2, "human", []) for _ in texts]
+
+  detector = FakeDetector()
+  analyzer = DocumentAnalyzer(detector, max_tokens=32, cache_size=1)
+  first = analyzer.analyze("word1 word2")
+  again = analyzer.analyze("word1 word2")
+  changed = analyzer.analyze("word1 word3")
+  assert first["computed_windows"] == 1
+  assert again["cache_hits"] == 1 and again["computed_windows"] == 0
+  assert changed["computed_windows"] == 1 and detector.calls == 2
+  assert len(analyzer.cache) == 1
+
+
+def test_streamed_layers_match_original_and_skip_unused_weights(source, tmp_path):
+  root = tmp_path / "extractor"
+  source.extractor.model.save_pretrained(root, max_shard_size="10KB")
+  source.extractor.tokenizer.save_pretrained(root)
+  extractor = StreamingExtractor(root, source.hooks, attention_implementation="eager")
+  loaded = []
+  original_load = extractor._load_layer
+  def load(index):
+    loaded.append(index)
+    return original_load(index)
+  extractor._load_layer = load
+  texts = ["word1 word4 word2", "word3"]
+  with torch.no_grad():
+    expected = source.extractor.get_activations(texts)
+  actual, mask = extractor.get_activations(texts, return_mask=True)
+  for key in expected:
+    # Unused padding activations are unspecified once its MLP work is skipped.
+    torch.testing.assert_close(actual[key][mask.bool()], expected[key][mask.bool()],
+                               rtol=1e-5, atol=1e-6)
+  assert loaded == [0, 1, 2]
+  assert extractor.profile["embedding_rows_read"] <= 6
+  assert extractor.profile["max_cpu_prefetch_blocks"] == 1
+  assert not hasattr(extractor, "model")
+
+
+def test_streamed_factory_never_calls_full_loader(source, tmp_path, monkeypatch):
+  source.saes[1].use_pre_enc_bias = False
+  root = tmp_path / "checkpoint"
+  (root / "heads").mkdir(parents=True)
+  source.extractor.model.save_pretrained(root / "extractor")
+  source.extractor.tokenizer.save_pretrained(root / "extractor")
+  safetensors.torch.save_file({k: v.contiguous() for k, v in source.state_dict().items()},
+                             str(root / "model.safetensors"))
+  source.load_head().save(str(root / "heads/logreg_tau0.85.safetensors"))
+  (root / "config.json").write_text(json.dumps({"hook_points": source.hooks,
+                                               "head": "logreg", "tau": .85}))
+  (root / "features.jsonl").write_text("\n".join(json.dumps({"id": i, **r})
+                                                 for i, r in source.feature_table.items()))
+  def forbidden(*args, **kwargs):
+    raise AssertionError("Full-model loader must not run")
+  monkeypatch.setattr(AuditableDetector, "from_pretrained", forbidden)
+  texts = ["word1 word4 word2", "word3"]
+  expected = source(texts, return_highlights=True)
+  detector = OptimizedDetector.from_pretrained(str(root), device="cpu",
+      local_files_only=True, attention_implementation="eager", compact_mlp=True)
+  actual = detector(texts, return_highlights=True, batch_size=2)
+  for before, after in zip(expected, actual):
+    assert after.logit == pytest.approx(before.logit, abs=2e-6)
+    assert [f.id for f in after.features] == [f.id for f in before.features]
+    assert after.tokens == before.tokens
+  assert len(detector.explainer.feature_table) == 4
+  assert detector.identity["compact_mlp"] is True
+
+
+@pytest.mark.parametrize("padding_side", ["right", "left"])
+@pytest.mark.parametrize("compact_mlp", [False, True])
+@pytest.mark.parametrize("compact_attention", [False, True])
+def test_streamed_batch_padding_preserves_independent_chunks(
+    source, tmp_path, padding_side, compact_mlp, compact_attention):
+  root = tmp_path / "batch-extractor"
+  source.extractor.model.save_pretrained(root)
+  source.extractor.tokenizer.save_pretrained(root)
+  extractor = StreamingExtractor(root, source.hooks, attention_implementation="sdpa",
+                                 compact_mlp=compact_mlp, compact_attention=compact_attention)
+  extractor.tokenizer.padding_side = padding_side
+  # Exceed the fixture's 64-token sliding window: only the full-attention mask
+  # may be omitted. Test empty and padded chunks against independent forwards.
+  texts = ["word1 word4 word2", "word3", "", "word9 word8 " * 36]
+  expected = [extractor.get_activations(text) for text in texts]
+  # Observe rows reaching the original MLP, independently of profile metadata.
+  shapes = []
+  original_load = extractor._load_layer
+  def load(index):
+    layer, size, seconds = original_load(index)
+    layer.mlp.register_forward_pre_hook(lambda module, args: shapes.append(args[0].shape))
+    return layer, size, seconds
+  extractor._load_layer = load
+  actual, mask = extractor.get_activations(texts, return_mask=True)
+  assert extractor.profile["batch_size"] == 4
+  assert len(extractor.profile["stages"]) == 3  # One block load shared by all chunks.
+  assert extractor.profile["mlp_tokens"] == (
+      extractor.profile["real_tokens"] if compact_mlp else mask.numel())
+  assert extractor.profile["attention_tokens"] == (
+      extractor.profile["real_tokens"] if compact_attention else mask.numel())
+  assert all(tuple(shape[:-1]) == ((int(mask.sum()),) if compact_mlp else tuple(mask.shape))
+             for shape in shapes)
+  assert len(shapes) == 3
+  masks = extractor.profile["attention_masks"]
+  assert (masks["full_attention"] is None) == (padding_side == "right")
+  assert masks["sliding_attention"] is not None
+  for i, single in enumerate(expected):
+    for hook in single:
+      torch.testing.assert_close(actual[hook][i][mask[i].bool()], single[hook][0],
+                                 rtol=1e-5, atol=1e-6)
+
+
+def test_tiny_padding_keeps_the_original_mlp_path(source, tmp_path):
+  root = tmp_path / "tiny-padding-extractor"
+  source.extractor.model.save_pretrained(root)
+  source.extractor.tokenizer.save_pretrained(root)
+  extractor = StreamingExtractor(root, source.hooks, attention_implementation="eager")
+  shapes = []
+  original_load = extractor._load_layer
+  def load(index):
+    layer, size, seconds = original_load(index)
+    layer.mlp.register_forward_pre_hook(lambda module, args: shapes.append(args[0].shape))
+    return layer, size, seconds
+  extractor._load_layer = load
+  texts = ["word1 word2", "word3"]
+  with torch.no_grad():
+    expected = source.extractor.get_activations(texts)
+  actual = extractor.get_activations(texts)
+  assert extractor.profile["padded_tokens"] - extractor.profile["real_tokens"] == 1
+  assert extractor.profile["mlp_tokens"] == extractor.profile["padded_tokens"]
+  assert shapes == [torch.Size((2, 3, 32))] * 3
+  for hook in actual:
+    torch.testing.assert_close(actual[hook], expected[hook], rtol=1e-5, atol=1e-6)

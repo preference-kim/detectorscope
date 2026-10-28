@@ -52,3 +52,15 @@ notes/
 # tool caches
 .pytype/
 requirements-lock.txt
+.venv/
+.pytest_cache/
+
+# Local investigation notes; the public overview is docs/mac-inference.md.
+/docs/handoff-mac-optimization.md
+/docs/mac-batching.md
+/docs/mac-compute-optimization.md
+/docs/mac-diagnosis.md
+/docs/mac-gemm-tuning.md
+/docs/mac-module-profile.md
+/docs/mac-results.md
+/docs/mac-roofline.md

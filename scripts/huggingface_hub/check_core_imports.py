@@ -24,7 +24,8 @@ import ast
 import os
 import sys
 
-CORE = {"huggingface_hub", "numpy", "safetensors", "torch", "transformers"}
+CORE = {"huggingface_hub", "numpy", "safetensors", "torch", "transformers",
+        "typing_extensions"}
 STDLIB = set(sys.stdlib_module_names)
 
 
