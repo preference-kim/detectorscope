@@ -69,7 +69,7 @@ Plots use **Input Token Throughput vs P50 E2E Request Latency**, with explicit *
 
 ## Performance — joint sweep, 2026-10-29
 
-Sweep: **CPU/MPS × BS {1, 2, 4} × ISL {256, 512, 1024}**, all FP32. **17 configurations completed; one OOM.** Each uses a fresh process, one warmup and six timed complete batches. P50 is directly measured, not a multi-batch time divided by batch count.
+Reference commit: **`c0106d1`**, before the prefetch update below. Sweep: **CPU/MPS × BS {1, 2, 4} × ISL {256, 512, 1024}**, all FP32. **17 configurations completed; one OOM.** Each uses a fresh process, one warmup and six timed complete batches. P50 is directly measured, not a multi-batch time divided by batch count.
 
 Both backends use the same public GPT-4o/human review prefixes: BS=1 alternates them, BS=2 includes both, and BS=4 repeats them. Timers include tokenization, weight I/O, backbone, SAE and scoring; exclude startup, HTTP and highlights; bypass result caching. The worker was paused. Clocks, filesystem cache and other apps were not controlled.
 
@@ -90,6 +90,25 @@ Each cell has a separate memory measurement. RSS includes initialization; driver
 
 [Measured grid, including backbone prefill throughput (CSV)](assets/mac-benchmark-grid.csv) · [Throughput/latency PNG](assets/mac-throughput-latency.png) · [Memory PNG](assets/mac-memory-grid.png)
 
+### Prefetch update — 2026-10-29
+
+The MPS FP32 path now coalesces adjacent weight reads, reuses one CPU staging buffer, and queues nonblocking parameter copies before waiting at each block boundary. GPU parameter layout and kernels stay the same. The CPU path retains its existing loader.
+
+Compared with `c0106d1`, two fresh-process rounds reversed variant order, with ten timed calls per variant/workload after warmup:
+
+| BS | Tokens per chunk | Before P50 | After P50 | Input tok/s, before → after |
+|---:|---|---:|---:|---:|
+| 1 | 256 | 1.970 s | 1.932 s | 126.6 → 128.2 |
+| 1 | 1024 | 2.062 s | 1.966 s | 490.1 → 482.6 |
+| 2 | 1024 + 420 | 2.169 s | 2.157 s | 657.4 → 668.3 |
+| 2 | 1024 + 1024 | 2.506 s | 2.394 s | 811.4 → 802.5 |
+
+Block-transfer time fell **20–27%**; E2E P50 fell **0.5–4.7%**. Input throughput changed **−1.5% to +1.7%**, so a stable E2E throughput gain is not established. Weight loading remains the main limit for shorter inputs. Clocks, filesystem cache and other applications were not controlled.
+
+Maximum run peak RSS was **0.94 → 0.90 GiB**; observed MPS driver maximum stayed **1.08 GiB**. The **2 GiB allocator limit**, one GPU compute block and one CPU prefetch slot remain unchanged. CPU staging is bounded to **one block (about 297 MiB)** and released after each forward; shard boundaries use separate bounded reads. Scores, labels, feature contributions and highlights matched exactly in both MPS rounds and the CPU regression check. **24 tests passed**, including real MPS buffer reuse and recovery after a queued-copy failure.
+
+[Prefetch comparison, including backbone prefill throughput (CSV)](assets/mac-prefetch-comparison.csv). To repeat with the worker paused and test extras installed: `python scripts/benchmark_prefetch_mac.py suite --baseline-ref c0106d1 --output outputs/new-prefetch-run`.
+
 ### Historical CPU reference
 
 The **2026-10-28** full-model CPU run used FP32, BS=1 and the same review prefixes, each warmed and timed three times. It is a historical reference, **not a verified unmodified-upstream baseline**.
@@ -105,6 +124,7 @@ Peak process RSS was **6.55 GiB** in the historical CPU run and **at most 1.03 G
 ## Current constraints and optimizations — 2026-10-29
 
 - **Bounded weight streaming:** storage → CPU → GPU, with one current GPU block and one CPU-prefetched block. CPU execution also retains only current/next blocks.
+- **MPS prefetch:** reuse CPU staging only after the GPU copy fence; drain queued copies before releasing storage on errors. GPU parameter layout is unchanged.
 - **FP32 baseline:** preserve the original parameter precision and the 2 GiB MPS allocator budget. CPU staging and runtime overhead are outside that allocator budget.
 - **Skip unused work:** stop after the required feature hooks, omit vocabulary projection and SAE decoding, and retain only classifier-relevant encoder features.
 - **Batch independent chunks:** share each block's weights across chunks. Right padding enables implicit causal SDPA while preserving sliding-window and feature-pooling masks.
@@ -120,7 +140,7 @@ Peak process RSS was **6.55 GiB** in the historical CPU run and **at most 1.03 G
 ## TODO
 
 - [ ] Expand representative workloads and sample counts for **P95 and HTTP-level E2E latency**, including mixed chunk lengths.
-- [ ] Review the **storage/CPU/GPU pipeline and prefetch scheduling**, including how load/transfer overlaps computation within the existing memory budget.
+- [ ] Further tune the **storage/CPU/GPU pipeline and prefetch scheduling**, including how load/transfer overlaps computation within the existing memory budget.
 - [ ] Improve **FFN/SDPA** using existing implementations and supported tuning options; then decide whether custom kernels or a framework change are justified.
 - [ ] Evaluate **low precision** against the original FP32 reference. **Keep original FP32 weights as the basis for current development and everyday use.**
 - [ ] Resolve **attention softcapping and reference-output semantics** before changing attention behavior.

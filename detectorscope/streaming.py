@@ -2,11 +2,13 @@
 
 No full-model state dict, embedding table, or mmap of a model shard is kept.
 One CPU loader thread prepares at most the next block while the current block
-executes. A synchronization boundary releases GPU weights before the next
-block is transferred. OS file caching remains reclaimable by the OS.
+executes. A synchronization boundary protects the reusable CPU staging buffer
+until GPU copies complete. Only the current GPU block is retained; the CPU
+staging buffer is released after each forward. OS file caching remains reclaimable by the OS.
 """
 
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager
 import json
 from pathlib import Path
 import re
@@ -69,6 +71,78 @@ class TensorReader:
     if array.size != count:
       raise IOError(f"Incomplete tensor: {key}")
     return self._torch(array.reshape(spec["shape"]), spec)
+
+  @contextmanager
+  def staging(self, enabled):
+    """Own one reusable CPU read buffer until all prefetch work has joined.
+
+    Reuse requires the caller to finish the GPU copy before submitting the
+    next read. CPU execution must not reuse a buffer that it is still reading.
+    """
+    self._reuse_buffer = enabled
+    self._buffer = None
+    self.read_stats = {"bytes": 0, "read_calls": 0, "allocations": 0,
+                       "reuses": 0, "max_staging_bytes": 0}
+    try:
+      yield
+    finally:
+      self._buffer = None
+      self._reuse_buffer = False
+
+  def read_many(self, keys):
+    """Coalesce adjacent requested tensors, without reading gaps or other layers."""
+    groups = []
+    for key in sorted(keys, key=lambda k: (str(self.tensors[k][0]), self.tensors[k][1])):
+      path, offset, spec = self.tensors[key]
+      size = int(np.prod(spec["shape"])) * self._numpy_dtype(spec).itemsize
+      if (groups and groups[-1][0] == path and groups[-1][2] == offset
+          and groups[-1][3] == spec["dtype"]):
+        groups[-1][2] += size
+        groups[-1][4].append(key)
+      else:
+        groups.append([path, offset, offset + size, spec["dtype"], [key]])
+    result = {}
+    for path, start, end, _, names in groups:
+      spec = self.tensors[names[0]][2]
+      dtype = self._numpy_dtype(spec)
+      size = (end - start) // dtype.itemsize
+      array = None
+      if len(groups) == 1 and getattr(self, "_reuse_buffer", False):
+        array = self._buffer
+        if array is not None and (array.size != size or array.dtype != dtype):
+          self._buffer = array = None
+      else:
+        # Fragmented or sharded blocks must not retain an extra cached block.
+        self._buffer = None
+      reused = array is not None
+      if array is None:
+        array = np.empty(size, dtype=dtype)
+      if len(groups) == 1 and getattr(self, "_reuse_buffer", False):
+        self._buffer = array
+      view = memoryview(array).cast("B")
+      with path.open("rb", buffering=0) as file:
+        file.seek(start)
+        done = 0
+        while done < len(view):
+          count = file.readinto(view[done:])
+          if not count:
+            raise IOError(f"Incomplete tensor group: {names[0]}")
+          done += count
+          if hasattr(self, "read_stats"):
+            self.read_stats["read_calls"] += 1
+      if hasattr(self, "read_stats"):
+        self.read_stats["bytes"] += end - start
+        self.read_stats["allocations"] += int(not reused)
+        self.read_stats["reuses"] += int(reused)
+      flat = self._torch(array, spec)
+      for key in names:
+        _, offset, spec = self.tensors[key]
+        count = int(np.prod(spec["shape"]))
+        result[key] = flat.narrow(0, (offset - start) // dtype.itemsize, count).view(spec["shape"])
+    if hasattr(self, "read_stats"):
+      self.read_stats["max_staging_bytes"] = max(
+          self.read_stats["max_staging_bytes"], sum(g[2] - g[1] for g in groups))
+    return result
 
   def rows(self, key, indices):
     path, offset, spec = self.tensors[key]
@@ -195,12 +269,36 @@ class StreamingExtractor(HFExtractor):
     # Meta construction creates no random CPU/GPU parameter storage.
     with torch.device("meta"):
       layer = Gemma2DecoderLayer(self.config, index)
-    state = {key[len(prefix):]: self.reader.read(key).to(self.dtype)
-             for key in self.reader.tensors if key.startswith(prefix)}
+    keys = [key for key in self.reader.tensors if key.startswith(prefix)]
+    coalesced = (self.device == "mps" and self.dtype == torch.float32
+                 and all(self.reader.tensors[key][2]["dtype"] == "F32" for key in keys))
+    if coalesced:
+      state = {key[len(prefix):]: value for key, value in self.reader.read_many(keys).items()}
+    else:
+      state = {key[len(prefix):]: self.reader.read(key).to(self.dtype) for key in keys}
     layer.load_state_dict(state, strict=True, assign=True)
     layer.eval().requires_grad_(False)
     weight_bytes = sum(p.numel() * p.element_size() for p in layer.parameters())
     return layer, weight_bytes, time.perf_counter() - started
+
+  @contextmanager
+  def _weight_staging(self):
+    with self.reader.staging(self.device == "mps" and self.dtype == torch.float32):
+      try:
+        yield
+      finally:
+        # Drain queued copies on exceptions too, before releasing NumPy-backed
+        # storage: its completion handlers may acquire the GIL.
+        if self.device == "mps" and self.dtype == torch.float32:
+          self._sync()
+
+  def _transfer_layer(self, layer):
+    if self.device == "mps" and self.dtype == torch.float32:
+      # Keep the original GPU parameter layout. Queue all parameter copies,
+      # then let the caller's one block fence protect the CPU prefetch slot.
+      layer.to(self.device, non_blocking=True)
+    else:
+      layer.to(self.device)
 
   def _sync(self):
     if self.device == "mps":
@@ -275,7 +373,10 @@ class StreamingExtractor(HFExtractor):
                    for kind, value in masks.items()},
                "embedding_rows_read": len(unique), "layer_weight_bytes": 0,
                "max_mps_driver_bytes": 0, "stages": []}
-    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="weights") as pool:
+    with (
+        self._weight_staging(),
+        ThreadPoolExecutor(max_workers=1, thread_name_prefix="weights") as pool,
+    ):
       future = pool.submit(self._load_layer, 0) if self.stop_layer else None
       try:
         for index in range(self.stop_layer):
@@ -286,14 +387,15 @@ class StreamingExtractor(HFExtractor):
           wait_seconds = time.perf_counter() - wait_start
           future = None  # Do not keep a Future owning the previous GPU block.
           transfer_start = time.perf_counter()
-          layer.to(self.device)
+          self._transfer_layer(layer)
           if mlp_indices is not None:
             layer.mlp = _UnpaddedMLP(layer.mlp, mlp_indices)
           if attention_spans is not None:
             layer.self_attn = _UnpaddedAttention(layer.self_attn, attention_spans)
           self._sync()
           transfer_seconds = time.perf_counter() - transfer_start
-          # Only now is the CPU staging slot free for the next block.
+          # The GPU copy is complete: the sole CPU staging buffer can now be
+          # overwritten by prefetch while this block computes on the GPU.
           if index + 1 < self.stop_layer:
             future = pool.submit(self._load_layer, index + 1)
           compute_start = time.perf_counter()
@@ -320,6 +422,7 @@ class StreamingExtractor(HFExtractor):
       finally:
         if future is not None:
           future.cancel()
+    profile["coalesced_weight_io"] = dict(self.reader.read_stats)
     acts[f"{self.hook_layers[self.stop_layer]}_input"] = hidden
     profile["forward_seconds"] = time.perf_counter() - forward_start
     self.profile = profile

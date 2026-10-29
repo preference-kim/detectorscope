@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 import json
+import weakref
 
 import pytest
 import safetensors.torch
@@ -274,3 +275,104 @@ def test_tiny_padding_keeps_the_original_mlp_path(source, tmp_path):
   assert shapes == [torch.Size((2, 3, 32))] * 3
   for hook in actual:
     torch.testing.assert_close(actual[hook], expected[hook], rtol=1e-5, atol=1e-6)
+
+
+def test_coalesced_reads_reuse_one_slot_and_do_not_read_gaps(tmp_path):
+  tensors = {name: torch.arange(size, dtype=torch.float32)
+             for name, size in (("a", 6), ("b", 5), ("c", 4), ("d", 3))}
+  safetensors.torch.save_file(tensors, str(tmp_path / "model.safetensors"))
+  reader = TensorReader(tmp_path)
+  with reader.staging(True):
+    first = reader.read_many(["b", "a"])
+    pointer = first["a"].untyped_storage().data_ptr()
+    assert first["b"].untyped_storage().data_ptr() == pointer
+    for key in first:
+      torch.testing.assert_close(first[key], tensors[key], rtol=0, atol=0)
+    del first
+    again = reader.read_many(["a", "b"])
+    assert again["a"].untyped_storage().data_ptr() == pointer
+    assert reader.read_stats["allocations"] == 1
+    assert reader.read_stats["reuses"] == 1
+    del again
+    separate = reader.read_many(["a", "c"])
+    assert reader._buffer is None
+    assert sum(x.untyped_storage().nbytes() for x in separate.values()) == (
+        tensors["a"].nbytes + tensors["c"].nbytes)
+    for key in separate:
+      torch.testing.assert_close(separate[key], tensors[key], rtol=0, atol=0)
+  assert reader._buffer is None and not reader._reuse_buffer
+
+
+def test_coalesced_reads_respect_shards_and_release_buffer_on_error(tmp_path):
+  weights = {"a": torch.arange(6, dtype=torch.float32),
+             "b": torch.arange(4, dtype=torch.float32)}
+  for key, value in weights.items():
+    safetensors.torch.save_file({key: value}, str(tmp_path / f"{key}.safetensors"))
+  (tmp_path / "model.safetensors.index.json").write_text(json.dumps({
+      "weight_map": {key: f"{key}.safetensors" for key in weights}}))
+  reader = TensorReader(tmp_path)
+  with reader.staging(True):
+    actual = reader.read_many(weights)
+    assert reader._buffer is None
+    for key in weights:
+      torch.testing.assert_close(actual[key], weights[key], rtol=0, atol=0)
+  with (tmp_path / "a.safetensors").open("r+b") as file:
+    file.truncate(reader.tensors["a"][1] + weights["a"].nbytes - 1)
+  with pytest.raises(IOError, match="Incomplete tensor group"):
+    with reader.staging(True):
+      reader.read_many(["a"])
+  assert reader._buffer is None and not reader._reuse_buffer
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Requires MPS")
+def test_mps_coalesced_pipeline_matches_reference_and_releases_weights(source, tmp_path):
+  root = tmp_path / "mps-extractor"
+  source.extractor.model.save_pretrained(root)
+  source.extractor.tokenizer.save_pretrained(root)
+  source.extractor.config._attn_implementation = "sdpa"
+  texts = ["word1 word4 word2", "word9 word8 " * 36]
+  with torch.no_grad():
+    expected, mask = source.extractor.get_activations(texts, return_mask=True)
+  extractor = StreamingExtractor(root, source.hooks, device="mps")
+  references = []
+  cpu_storages = []
+  gpu_weight_bytes = []
+  load = extractor._load_layer
+  transfer = extractor._transfer_layer
+  def record(index):
+    layer, size, seconds = load(index)
+    references.append(weakref.ref(layer))
+    return layer, size, seconds
+  extractor._load_layer = record
+  def observe_transfer(layer):
+    cpu_storages.append(next(layer.parameters()).untyped_storage().data_ptr())
+    transfer(layer)
+    storages = {p.untyped_storage().data_ptr(): p.untyped_storage().nbytes()
+                for p in layer.parameters()}
+    gpu_weight_bytes.append(sum(storages.values()))
+  extractor._transfer_layer = observe_transfer
+  actual = extractor.get_activations(texts)
+  for hook in actual:
+    torch.testing.assert_close(actual[hook][mask.bool()], expected[hook][mask.bool()],
+                               rtol=1e-4, atol=1e-5)
+  io = extractor.profile["coalesced_weight_io"]
+  assert io["allocations"] == 1 and io["reuses"] == 2
+  assert io["read_calls"] == 3
+  assert io["bytes"] == 3 * extractor.profile["layer_weight_bytes"]
+  assert io["max_staging_bytes"] == extractor.profile["layer_weight_bytes"]
+  assert extractor.reader._buffer is None
+  assert len(cpu_storages) == 3 and len(set(cpu_storages)) == 1
+  assert gpu_weight_bytes == [extractor.profile["layer_weight_bytes"]] * 3
+  assert all(ref() is None for ref in references)
+  def fail(layer):
+    transfer(layer)  # Fail after async copies were queued, before the caller's fence.
+    raise RuntimeError("fixture transfer failure")
+  extractor._transfer_layer = fail
+  with pytest.raises(RuntimeError, match="fixture transfer failure"):
+    extractor.get_activations(texts)
+  assert extractor.reader._buffer is None and not extractor.reader._reuse_buffer
+  extractor._transfer_layer = observe_transfer
+  recovered = extractor.get_activations(texts)
+  for hook in recovered:
+    torch.testing.assert_close(recovered[hook][mask.bool()], expected[hook][mask.bool()],
+                               rtol=1e-4, atol=1e-5)
