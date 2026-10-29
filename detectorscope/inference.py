@@ -140,6 +140,7 @@ class OptimizedDetector:
     attention = kwargs.pop("attention_implementation", "sdpa")
     compact_mlp = kwargs.pop("compact_mlp", True)
     compact_attention = kwargs.pop("compact_attention", False)
+    fused_norm = kwargs.pop("fused_norm", True)
     if kwargs:
       raise TypeError(f"Unsupported loading options: {sorted(kwargs)}")
     if kind != "logreg":
@@ -150,7 +151,7 @@ class OptimizedDetector:
     result.hooks = config["hook_points"]
     result.extractor = StreamingExtractor(root / "extractor", result.hooks,
         result.device, torch_dtype, attention, compact_mlp=compact_mlp,
-        compact_attention=compact_attention)
+        compact_attention=compact_attention, fused_norm=fused_norm)
     reader = TensorReader(root)
     weight = (head._weight * head.interp_mask).detach().cpu()
     result.input_dim = weight.numel()
@@ -179,6 +180,7 @@ class OptimizedDetector:
                        "backbone_dtype": torch_dtype,
                        "compact_mlp": compact_mlp,
                        "compact_attention": compact_attention,
+                       "fused_norm": result.extractor.fused_norm,
                        "retained_features": len(result.feature_ids),
                        "original_features": result.input_dim,
                        "weight_loading": (

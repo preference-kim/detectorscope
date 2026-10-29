@@ -177,6 +177,22 @@ class TensorReader:
     return self._torch(out, spec)
 
 
+class _FusedRMSNorm(torch.nn.Module):
+  """Use PyTorch's RMSNorm with Gemma's unchanged FP32 scale parameter."""
+
+  def __init__(self, norm):
+    super().__init__()
+    self.weight = norm.weight
+    self.eps = norm.eps
+
+  def forward(self, hidden):
+    # Gemma stores an offset from one. Keep that parameter intact, including
+    # its FP32 precision; only the normalization implementation changes.
+    return torch.nn.functional.rms_norm(
+        hidden.float(), (self.weight.numel(),), 1.0 + self.weight.float(),
+        self.eps).type_as(hidden)
+
+
 class _UnpaddedMLP(torch.nn.Module):
   """Run the token-local MLP only on valid rows, restoring the batch layout."""
 
@@ -228,7 +244,8 @@ class StreamingExtractor(HFExtractor):
   """The HF extractor's tokenizer contract with bounded Gemma block loading."""
 
   def __init__(self, model_path, hooks, device="cpu", torch_dtype="float32",
-               attention_implementation="sdpa", compact_mlp=True, compact_attention=False):
+               attention_implementation="sdpa", compact_mlp=True, compact_attention=False,
+               fused_norm=True):
     self.config = AutoConfig.from_pretrained(model_path, local_files_only=True)
     if self.config.model_type != "gemma2":
       raise ValueError("Streaming extraction supports Gemma-2 only.")
@@ -237,6 +254,9 @@ class StreamingExtractor(HFExtractor):
     self.config._attn_implementation = attention_implementation
     self.compact_mlp = compact_mlp
     self.compact_attention = compact_attention
+    # The measured fused kernel is the FP32 MPS path. Leave other backends
+    # and precisions on their existing implementation.
+    self.fused_norm = fused_norm and device == "mps" and torch_dtype == "float32"
     self.tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
     if self.tokenizer.pad_token is None:
       self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -277,6 +297,10 @@ class StreamingExtractor(HFExtractor):
     else:
       state = {key[len(prefix):]: self.reader.read(key).to(self.dtype) for key in keys}
     layer.load_state_dict(state, strict=True, assign=True)
+    if self.fused_norm:
+      for name in ("input_layernorm", "post_attention_layernorm",
+                   "pre_feedforward_layernorm", "post_feedforward_layernorm"):
+        setattr(layer, name, _FusedRMSNorm(getattr(layer, name)))
     layer.eval().requires_grad_(False)
     weight_bytes = sum(p.numel() * p.element_size() for p in layer.parameters())
     return layer, weight_bytes, time.perf_counter() - started
@@ -363,6 +387,7 @@ class StreamingExtractor(HFExtractor):
                "max_cpu_compute_blocks": int(self.device == "cpu"),
                "batch_size": ids.shape[0], "sequence_length": ids.shape[1],
                "padding_side": self.tokenizer.padding_side,
+               "fused_norm": self.fused_norm,
                "real_tokens": real_tokens,
                "padded_tokens": ids.numel(),
                "mlp_tokens": real_tokens if mlp_indices is not None else ids.numel(),

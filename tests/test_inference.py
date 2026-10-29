@@ -14,7 +14,8 @@ from detectorscope.model.detectors.auditable import AuditableDetector, Detection
 from detectorscope.model.detectors.heads.logreg import LogRegHead
 from detectorscope.model.extractor import HFExtractor
 from detectorscope.model.sae import JumpReLUSAE
-from detectorscope.streaming import StreamingExtractor, TensorReader
+from detectorscope.streaming import StreamingExtractor, TensorReader, _FusedRMSNorm
+from transformers.models.gemma2.modeling_gemma2 import Gemma2RMSNorm
 
 
 @pytest.fixture
@@ -210,6 +211,7 @@ def test_streamed_factory_never_calls_full_loader(source, tmp_path, monkeypatch)
     assert after.tokens == before.tokens
   assert len(detector.explainer.feature_table) == 4
   assert detector.identity["compact_mlp"] is True
+  assert detector.identity["fused_norm"] is False  # CPU remains on Gemma's path.
 
 
 @pytest.mark.parametrize("padding_side", ["right", "left"])
@@ -325,7 +327,8 @@ def test_coalesced_reads_respect_shards_and_release_buffer_on_error(tmp_path):
 
 
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Requires MPS")
-def test_mps_coalesced_pipeline_matches_reference_and_releases_weights(source, tmp_path):
+@pytest.mark.parametrize("fused_norm", [False, True])
+def test_mps_coalesced_pipeline_matches_reference_and_releases_weights(source, tmp_path, fused_norm):
   root = tmp_path / "mps-extractor"
   source.extractor.model.save_pretrained(root)
   source.extractor.tokenizer.save_pretrained(root)
@@ -333,7 +336,7 @@ def test_mps_coalesced_pipeline_matches_reference_and_releases_weights(source, t
   texts = ["word1 word4 word2", "word9 word8 " * 36]
   with torch.no_grad():
     expected, mask = source.extractor.get_activations(texts, return_mask=True)
-  extractor = StreamingExtractor(root, source.hooks, device="mps")
+  extractor = StreamingExtractor(root, source.hooks, device="mps", fused_norm=fused_norm)
   references = []
   cpu_storages = []
   gpu_weight_bytes = []
@@ -341,6 +344,12 @@ def test_mps_coalesced_pipeline_matches_reference_and_releases_weights(source, t
   transfer = extractor._transfer_layer
   def record(index):
     layer, size, seconds = load(index)
+    assert isinstance(layer.input_layernorm, _FusedRMSNorm) == fused_norm
+    # Wrapping normalization must neither transform nor duplicate weights.
+    expected_state = source.extractor.model.model.layers[index].state_dict()
+    for name, value in layer.state_dict().items():
+      assert value.dtype == torch.float32
+      torch.testing.assert_close(value, expected_state[name], rtol=0, atol=0)
     references.append(weakref.ref(layer))
     return layer, size, seconds
   extractor._load_layer = record
@@ -364,6 +373,7 @@ def test_mps_coalesced_pipeline_matches_reference_and_releases_weights(source, t
   assert len(cpu_storages) == 3 and len(set(cpu_storages)) == 1
   assert gpu_weight_bytes == [extractor.profile["layer_weight_bytes"]] * 3
   assert all(ref() is None for ref in references)
+  assert extractor.profile["fused_norm"] == fused_norm
   def fail(layer):
     transfer(layer)  # Fail after async copies were queued, before the caller's fence.
     raise RuntimeError("fixture transfer failure")
@@ -376,3 +386,22 @@ def test_mps_coalesced_pipeline_matches_reference_and_releases_weights(source, t
   for hook in recovered:
     torch.testing.assert_close(recovered[hook][mask.bool()], expected[hook][mask.bool()],
                                rtol=1e-4, atol=1e-5)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Requires MPS")
+def test_fused_gemma_norm_preserves_weight_and_epsilon():
+  torch.manual_seed(83)
+  original = Gemma2RMSNorm(2304, eps=1e-6).to("mps").eval()
+  with torch.no_grad():
+    original.weight.normal_(mean=0.1, std=0.3)
+  before = original.weight.detach().cpu().clone()
+  fused = _FusedRMSNorm(original)
+  assert fused.weight is original.weight
+  with torch.inference_mode():
+    # Include inputs where epsilon dominates, and noncontiguous token rows.
+    for scale in (0.0, 1e-4, 1.0, 100.0):
+      hidden = (torch.randn(2, 9, 2304, device="mps") * scale)[:, ::2]
+      expected, actual = original(hidden), fused(hidden)
+      assert actual.dtype == torch.float32
+      torch.testing.assert_close(actual, expected, rtol=2e-6, atol=2e-6)
+  torch.testing.assert_close(original.weight.cpu(), before, rtol=0, atol=0)

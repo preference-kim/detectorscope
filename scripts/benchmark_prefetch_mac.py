@@ -9,6 +9,7 @@ import argparse
 from datetime import datetime, timezone
 import hashlib
 import importlib.util
+import inspect
 import json
 from pathlib import Path
 import random
@@ -27,6 +28,24 @@ def save(path, data):
   temporary.replace(path)
 
 
+def disk_read_bytes():
+  """macOS process disk-read accounting, separate from requested tensor bytes."""
+  if sys.platform != "darwin":
+    return None
+  import ctypes
+  import os
+  class Usage(ctypes.Structure):
+    _fields_ = [("uuid", ctypes.c_uint8 * 16)] + [(name, ctypes.c_uint64) for name in
+        "user system pkg intr pageins wired resident footprint start exit childuser childsys "
+        "childpkg childintr childpageins childelapsed diskread diskwrite".split()]
+  library = ctypes.CDLL("/usr/lib/libproc.dylib")
+  library.proc_pid_rusage.argtypes = [ctypes.c_int, ctypes.c_int, ctypes.c_void_p]
+  usage = Usage()
+  if library.proc_pid_rusage(os.getpid(), 2, ctypes.byref(usage)):
+    raise RuntimeError("proc_pid_rusage failed")
+  return usage.diskread
+
+
 def run(args):
   import time
   import torch
@@ -40,6 +59,14 @@ def run(args):
   module = importlib.util.module_from_spec(spec)
   spec.loader.exec_module(module)
   inference.StreamingExtractor = module.StreamingExtractor
+  if "fused_norm" not in inspect.signature(module.StreamingExtractor).parameters:
+    # Current factory metadata also describes snapshots predating this option.
+    # Keep their implementation intact and explicitly mark it unfused.
+    class PreviousExtractor(module.StreamingExtractor):
+      def __init__(self, *args, fused_norm=False, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fused_norm = False
+    inference.StreamingExtractor = PreviousExtractor
   def forbidden(*a, **kw):
     raise AssertionError("Full-model loading is forbidden")
   inference.AuditableDetector.from_pretrained = forbidden
@@ -69,10 +96,12 @@ def run(args):
       random.Random(83 + repeat).shuffle(order)
       for case in order:
         sync(args.device)
+        disk_before = disk_read_bytes()
         start = time.perf_counter()
         result = detector(fixtures[case], batch_size=len(fixtures[case]))
         sync(args.device)
         elapsed = time.perf_counter() - start
+        disk_after = disk_read_bytes()
         profile = detector.extractor.profile
         assert len(profile["stages"]) == 23
         assert profile["max_cpu_prefetch_blocks"] == 1
@@ -83,6 +112,8 @@ def run(args):
           assert io["max_staging_bytes"] <= profile["layer_weight_bytes"]
         assert getattr(detector.extractor.reader, "_buffer", None) is None
         data["rows"].append({"case": case, "repeat": repeat, "seconds": elapsed,
+                             "process_disk_read_bytes": (None if disk_before is None
+                                 else disk_after - disk_before),
                              "outputs": [serialize(x) for x in result], "profile": profile})
         save(path, data)
     for case, texts in fixtures.items():
@@ -96,16 +127,47 @@ def run(args):
     save(path, data)
 
 
-def summarize(output):
+def check_outputs(expected, actual, maxima, score_atol, highlight_atol):
+  """Check categorical outputs exactly; bound and report every numeric change."""
+  assert len(expected) == len(actual), "Detection count changed"
+  def check(kind, a, b, tolerance):
+    delta = abs(a - b)
+    maxima[kind] = max(maxima.get(kind, 0), delta)
+    assert delta <= tolerance, f"{kind} difference {delta} exceeds {tolerance}"
+  for before, after in zip(expected, actual):
+    assert before["label"] == after["label"], "Label changed"
+    assert before["features"].keys() == after["features"].keys(), "Feature IDs changed"
+    for field in ("logit", "p_ai", "bias"):
+      check(field, before[field], after[field], score_atol)
+    for key in before["features"]:
+      check("feature_contribution", before["features"][key], after["features"][key], score_atol)
+    if "highlights" in before:
+      assert before["tokens"] == after["tokens"], "Highlight tokens changed"
+      assert before["highlights"].keys() == after["highlights"].keys(), "Highlight IDs changed"
+      for key, values in before["highlights"].items():
+        other = after["highlights"][key]
+        assert [x[0] for x in values] == [x[0] for x in other], "Highlight positions changed"
+        for (_, a), (_, b) in zip(values, other):
+          check("highlight_activation", a, b, highlight_atol)
+
+
+def summarize(output, score_atol=0.0, highlight_atol=0.0):
   runs = [json.loads(p.read_text()) for p in sorted(output.glob("round*-*.json"))]
   if not runs or any(r["status"] != "complete" for r in runs):
     raise ValueError("Incomplete comparison")
   references = {row["case"]: row["outputs"] for row in runs[0]["rows"]}
+  maxima = {}
   for run in runs:
     assert run["sample_tokens"] == runs[0]["sample_tokens"]
-    assert all(row["outputs"] == references[row["case"]] for row in run["rows"])
-    assert run["highlights"] == runs[0]["highlights"]
-  summary = {"status": "complete", "exact_output_and_highlight_agreement": True,
+    for row in run["rows"]:
+      check_outputs(references[row["case"]], row["outputs"], maxima, score_atol, highlight_atol)
+    assert run["highlights"].keys() == runs[0]["highlights"].keys()
+    for case, values in run["highlights"].items():
+      check_outputs(runs[0]["highlights"][case], values, maxima, score_atol, highlight_atol)
+  summary = {"status": "complete", "exact_output_and_highlight_agreement": not any(maxima.values()),
+             "labels_features_tokens_and_highlight_positions_match": True,
+             "max_absolute_differences": maxima,
+             "tolerances": {"score_atol": score_atol, "highlight_atol": highlight_atol},
              "cases": {}, "memory": {}}
   for case, lengths in runs[0]["sample_tokens"].items():
     row = {"batch_size": len(lengths), "input_tokens_per_chunk": lengths}
@@ -115,6 +177,16 @@ def summarize(output):
       row[variant] = {"timed_calls": len(calls),
                       "e2e_latency_p50_seconds": statistics.median(r["seconds"] for r in calls),
                       "input_token_throughput": sum(lengths) * len(calls) / sum(r["seconds"] for r in calls),
+                      "backbone_prefill_token_throughput": sum(lengths) * len(calls) /
+                          sum(r["profile"]["forward_seconds"] for r in calls),
+                      "stage_sum_p50_seconds": {key: statistics.median(
+                          sum(stage[key] for stage in r["profile"]["stages"]) for r in calls)
+                          for key in ("load_seconds", "wait_seconds", "transfer_seconds",
+                                      "compute_seconds", "release_seconds")},
+                      "process_disk_read_bytes_p50": statistics.median(
+                          r["process_disk_read_bytes"] for r in calls
+                          if r.get("process_disk_read_bytes") is not None)
+                          if any(r.get("process_disk_read_bytes") is not None for r in calls) else None,
                       "round_p50_seconds": [statistics.median(r["seconds"] for r in run["rows"]
                           if r["case"] == case and r["repeat"] >= 0)
                           for run in runs if run["variant"] == variant]}
@@ -140,8 +212,12 @@ def main():
   parser.add_argument("--rounds", type=int, default=2)
   parser.add_argument("--variant", choices=["baseline", "production"])
   parser.add_argument("--round", type=int, default=0)
+  parser.add_argument("--score-atol", type=float, default=0.0)
+  parser.add_argument("--highlight-atol", type=float, default=0.0)
   parser.add_argument("--cases", nargs="+", default=["single_256", "single_1024", "mixed_1024_420", "equal_1024"])
   args = parser.parse_args()
+  if args.score_atol < 0 or args.highlight_atol < 0:
+    raise ValueError("Output tolerances must be nonnegative")
   args.output = args.output.resolve()
   if args.command == "run":
     run(args)
@@ -162,7 +238,7 @@ def main():
                    "--repeats", str(args.repeats), "--cases", *args.cases]
         with (args.output / f"round{round_id}-{variant}.log").open("w") as log:
           subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, check=True)
-  print(json.dumps(summarize(args.output), indent=2))
+  print(json.dumps(summarize(args.output, args.score_atol, args.highlight_atol), indent=2))
 
 
 if __name__ == "__main__":

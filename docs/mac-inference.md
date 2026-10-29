@@ -1,6 +1,6 @@
 # About this fork
 
-**Status: 2026-10-29 KST.**
+**Status: 2026-10-30 KST.**
 
 ## Why this fork exists
 
@@ -49,7 +49,7 @@ Model revision: `9baaff9e2d1cdb79cafa90cdb27811b847e69dae`. Parameter counts, dt
 
 Batch size (**BS**) and tokens per chunk (**ISL**) are separate knobs. We track **P50 E2E request latency**, **input token throughput** (valid tokens / total timed seconds), and **memory**. The CSVs also include backbone prefill throughput: valid tokens / 23-block extractor time, including weight I/O and excluding SAE/scoring. There is no generated output, so Interactivity, TTFT and TPOT do not apply.
 
-The grid below is from `c0106d1`, before the latest prefetch change: CPU/MPS × BS {1, 2, 4} × ISL {256, 512, 1024}, all FP32. Each point has one warmup and six timed calls. Timing includes tokenization, weight I/O and detection; startup, HTTP and highlights are excluded. Whiskers show min–max. The worker was paused; filesystem cache, clocks and other apps were not controlled.
+The grid below is from `c0106d1`, before the prefetch and normalization changes: CPU/MPS × BS {1, 2, 4} × ISL {256, 512, 1024}, all FP32. Each point has one warmup and six timed calls. Timing includes tokenization, weight I/O and detection; startup, HTTP and highlights are excluded. Whiskers show min–max. The worker was paused; filesystem cache, clocks and other apps were not controlled.
 
 ![Input throughput versus P50 latency, by chunk length and batch size](assets/mac-throughput-latency.svg)
 
@@ -59,7 +59,9 @@ CPU wins at 256 tokens in this grid. MPS does better with more work per batch: a
 
 RSS and sampled MPS driver allocation are shown separately; they should not be added on unified memory. Driver samples can miss transient peaks.
 
-The latest prefetch change reduced transfer time by **20–27%**, but E2E P50 improved only **0.5–4.7%** and input throughput changed **−1.5% to +1.7%**. No clear throughput win yet. Outputs and highlights matched exactly on the tested fixtures.
+The prefetch change reduced transfer time by **20–27%**, but E2E P50 improved only **0.5–4.7%** and input throughput changed **−1.5% to +1.7%**. Outputs and highlights matched exactly on the tested fixtures.
+
+The new FP32 normalization change reduced long-batch compute by about **5%** in a shuffled comparison. Paired median request savings were **100–154 ms** for the two long-batch workloads; short inputs showed no consistent benefit. Cache variation and an outlier prevent a general throughput claim. Labels and feature identities matched, with small numeric differences. [Results and reproduction](mac-normalization.md).
 
 [Grid numbers](assets/mac-benchmark-grid.csv) · [Latest prefetch comparison](assets/mac-prefetch-comparison.csv)
 
@@ -71,7 +73,7 @@ The opening comparison uses a full-model CPU run from Oct 28: FP32, BS=1, 256–
 
 Weights move from storage through CPU to MPS one block at a time: **one GPU compute block and one CPU prefetch slot**. CPU execution keeps only the current and next blocks. Adjacent reads share a reusable CPU buffer on MPS, and parameter copies are queued before a block-level wait. The buffer is reused only after those copies finish.
 
-We also skip unused model/SAE work and reduce FFN work on padded batches. This still uses existing PyTorch/MPS kernels. Original FP32 weights and the **2 GiB MPS allocator limit** stay in place; that limit does not cover all process RAM.
+We also skip unused model/SAE work, reduce FFN work on padded batches and use PyTorch's fused RMSNorm on MPS FP32. Original FP32 weights and the **2 GiB MPS allocator limit** stay in place; that limit does not cover all process RAM.
 
 ## TODO
 
