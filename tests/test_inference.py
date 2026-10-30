@@ -212,6 +212,8 @@ def test_streamed_factory_never_calls_full_loader(source, tmp_path, monkeypatch)
   assert len(detector.explainer.feature_table) == 4
   assert detector.identity["compact_mlp"] is True
   assert detector.identity["fused_norm"] is False  # CPU remains on Gemma's path.
+  assert detector.identity["reuse_mps_cache"] is False
+  assert detector.identity["shared_prefetch"] is False
 
 
 @pytest.mark.parametrize("padding_side", ["right", "left"])
@@ -305,7 +307,8 @@ def test_coalesced_reads_reuse_one_slot_and_do_not_read_gaps(tmp_path):
   assert reader._buffer is None and not reader._reuse_buffer
 
 
-def test_coalesced_reads_respect_shards_and_release_buffer_on_error(tmp_path):
+@pytest.mark.parametrize("shared_buffer", [False, True])
+def test_coalesced_reads_respect_shards_and_release_buffer_on_error(tmp_path, shared_buffer):
   weights = {"a": torch.arange(6, dtype=torch.float32),
              "b": torch.arange(4, dtype=torch.float32)}
   for key, value in weights.items():
@@ -313,30 +316,46 @@ def test_coalesced_reads_respect_shards_and_release_buffer_on_error(tmp_path):
   (tmp_path / "model.safetensors.index.json").write_text(json.dumps({
       "weight_map": {key: f"{key}.safetensors" for key in weights}}))
   reader = TensorReader(tmp_path)
+  buffer = torch.empty(10, dtype=torch.float32).numpy() if shared_buffer else None
   with reader.staging(True):
-    actual = reader.read_many(weights)
+    actual = reader.read_many(weights, buffer=buffer)
     assert reader._buffer is None
     for key in weights:
       torch.testing.assert_close(actual[key], weights[key], rtol=0, atol=0)
+    if shared_buffer:
+      assert reader.read_stats["allocations"] == 0
+      assert actual["b"].data_ptr() == actual["a"].data_ptr() + weights["a"].nbytes
+      with pytest.raises(ValueError, match="does not fit"):
+        reader.read_many(weights, buffer=buffer[:5])
   with (tmp_path / "a.safetensors").open("r+b") as file:
     file.truncate(reader.tensors["a"][1] + weights["a"].nbytes - 1)
   with pytest.raises(IOError, match="Incomplete tensor group"):
     with reader.staging(True):
-      reader.read_many(["a"])
+      reader.read_many(["a"], buffer=buffer)
   assert reader._buffer is None and not reader._reuse_buffer
 
 
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Requires MPS")
 @pytest.mark.parametrize("fused_norm", [False, True])
-def test_mps_coalesced_pipeline_matches_reference_and_releases_weights(source, tmp_path, fused_norm):
+@pytest.mark.parametrize("reuse_mps_cache", [False, True])
+@pytest.mark.parametrize("shared_prefetch", [False, True])
+def test_mps_coalesced_pipeline_matches_reference_and_releases_weights(
+    source, tmp_path, fused_norm, reuse_mps_cache, shared_prefetch):
   root = tmp_path / "mps-extractor"
-  source.extractor.model.save_pretrained(root)
+  source.extractor.model.save_pretrained(root, max_shard_size="10KB" if shared_prefetch else "5GB")
   source.extractor.tokenizer.save_pretrained(root)
   source.extractor.config._attn_implementation = "sdpa"
   texts = ["word1 word4 word2", "word9 word8 " * 36]
   with torch.no_grad():
     expected, mask = source.extractor.get_activations(texts, return_mask=True)
-  extractor = StreamingExtractor(root, source.hooks, device="mps", fused_norm=fused_norm)
+  extractor = StreamingExtractor(root, source.hooks, device="mps", fused_norm=fused_norm,
+                                 reuse_mps_cache=reuse_mps_cache, shared_prefetch=shared_prefetch)
+  releases = []
+  release_cache = extractor._release_cache
+  def observe_release():
+    releases.append(len(references))
+    release_cache()
+  extractor._release_cache = observe_release
   references = []
   cpu_storages = []
   gpu_weight_bytes = []
@@ -350,12 +369,24 @@ def test_mps_coalesced_pipeline_matches_reference_and_releases_weights(source, t
     for name, value in layer.state_dict().items():
       assert value.dtype == torch.float32
       torch.testing.assert_close(value, expected_state[name], rtol=0, atol=0)
+    layer.fixture_index = index
     references.append(weakref.ref(layer))
     return layer, size, seconds
   extractor._load_layer = record
   def observe_transfer(layer):
-    cpu_storages.append(next(layer.parameters()).untyped_storage().data_ptr())
+    pointer = next(layer.parameters()).untyped_storage().data_ptr()
+    if shared_prefetch:
+      slot = extractor._shared_cpu_slots[layer.fixture_index % 2]
+      start = slot.__array_interface__["data"][0]
+      assert start <= pointer < start + slot.nbytes
+      cpu_storages.append(start)
+    else:
+      cpu_storages.append(pointer)
     transfer(layer)
+    if shared_prefetch:
+      expected_state = source.extractor.model.model.layers[layer.fixture_index].state_dict()
+      for name, value in layer.state_dict().items():
+        torch.testing.assert_close(value.cpu(), expected_state[name], rtol=0, atol=0)
     storages = {p.untyped_storage().data_ptr(): p.untyped_storage().nbytes()
                 for p in layer.parameters()}
     gpu_weight_bytes.append(sum(storages.values()))
@@ -365,27 +396,88 @@ def test_mps_coalesced_pipeline_matches_reference_and_releases_weights(source, t
     torch.testing.assert_close(actual[hook][mask.bool()], expected[hook][mask.bool()],
                                rtol=1e-4, atol=1e-5)
   io = extractor.profile["coalesced_weight_io"]
-  assert io["allocations"] == 1 and io["reuses"] == 2
-  assert io["read_calls"] == 3
+  if shared_prefetch:
+    assert io["allocations"] == 0 and io["reuses"] > 3  # Multiple shards per block.
+    assert io["read_calls"] == io["reuses"]
+  else:
+    assert io["allocations"] == 1 and io["reuses"] == 2
+    assert io["read_calls"] == 3
   assert io["bytes"] == 3 * extractor.profile["layer_weight_bytes"]
   assert io["max_staging_bytes"] == extractor.profile["layer_weight_bytes"]
   assert extractor.reader._buffer is None
-  assert len(cpu_storages) == 3 and len(set(cpu_storages)) == 1
+  assert extractor._shared_cpu_slots is None and extractor._shared_gpu_slots is None
+  assert len(cpu_storages) == 3 and len(set(cpu_storages)) == (2 if shared_prefetch else 1)
   assert gpu_weight_bytes == [extractor.profile["layer_weight_bytes"]] * 3
   assert all(ref() is None for ref in references)
   assert extractor.profile["fused_norm"] == fused_norm
+  assert extractor.profile["reuse_mps_cache"] == reuse_mps_cache
+  assert extractor.profile["shared_prefetch"] == shared_prefetch
+  assert len(releases) == (1 if reuse_mps_cache else 3 + int(shared_prefetch))
   def fail(layer):
     transfer(layer)  # Fail after async copies were queued, before the caller's fence.
     raise RuntimeError("fixture transfer failure")
   extractor._transfer_layer = fail
+  releases.clear()
   with pytest.raises(RuntimeError, match="fixture transfer failure"):
     extractor.get_activations(texts)
   assert extractor.reader._buffer is None and not extractor.reader._reuse_buffer
+  assert extractor._shared_cpu_slots is None and extractor._shared_gpu_slots is None
+  assert len(releases) == int(reuse_mps_cache or shared_prefetch)
   extractor._transfer_layer = observe_transfer
   recovered = extractor.get_activations(texts)
   for hook in recovered:
     torch.testing.assert_close(recovered[hook][mask.bool()], expected[hook][mask.bool()],
                                rtol=1e-4, atol=1e-5)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Requires MPS")
+@pytest.mark.parametrize("failure_stage", ["prefetch", "compute"])
+def test_shared_prefetch_drains_work_after_failure(source, tmp_path, failure_stage):
+  root = tmp_path / "shared-extractor"
+  source.extractor.model.save_pretrained(root, max_shard_size="10KB")
+  source.extractor.tokenizer.save_pretrained(root)
+  extractor = StreamingExtractor(root, source.hooks, device="mps", shared_prefetch=True)
+  load = extractor._load_layer
+  references = []
+  def fail(index):
+    layer, size, seconds = load(index)
+    references.append(weakref.ref(layer))
+    if failure_stage == "prefetch" and index == 1:
+      raise IOError("fixture prefetch failure")
+    if failure_stage == "compute" and index == 0:
+      forward = layer.forward
+      def queued_failure(*args, **kwargs):
+        forward(*args, **kwargs)  # GPU work is queued before the exception.
+        raise IOError("fixture compute failure")
+      layer.forward = queued_failure
+    return layer, size, seconds
+  extractor._load_layer = fail
+  with pytest.raises(IOError, match=f"fixture {failure_stage} failure"):
+    extractor.get_activations("word1 word4")
+  assert extractor._shared_cpu_slots is None and extractor._shared_gpu_slots is None
+  assert extractor.reader._buffer is None and not extractor.reader._reuse_buffer
+  # The injected forward closes over a bound method, so collect its fixture cycle.
+  import gc
+  gc.collect()
+  assert all(ref() is None for ref in references)
+  extractor._load_layer = load
+  actual = extractor.get_activations("word1 word4")
+  extractor.shared_prefetch = False
+  expected = extractor.get_activations("word1 word4")
+  for hook in actual:
+    torch.testing.assert_close(actual[hook], expected[hook], rtol=0, atol=0)
+
+
+@pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Requires MPS")
+def test_shared_prefetch_without_executed_blocks(source, tmp_path):
+  root = tmp_path / "embedding-only"
+  source.extractor.model.save_pretrained(root)
+  source.extractor.tokenizer.save_pretrained(root)
+  extractor = StreamingExtractor(root, ["model.layers.0"], device="mps", shared_prefetch=True)
+  actual = extractor.get_activations("word1 word2")
+  assert list(actual) == ["model.layers.0_input"]
+  assert extractor.profile["stages"] == []
+  assert extractor._shared_cpu_slots is None and extractor._shared_gpu_slots is None
 
 
 @pytest.mark.skipif(not torch.backends.mps.is_available(), reason="Requires MPS")

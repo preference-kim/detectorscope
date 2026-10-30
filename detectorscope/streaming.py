@@ -3,8 +3,10 @@
 No full-model state dict, embedding table, or mmap of a model shard is kept.
 One CPU loader thread prepares at most the next block while the current block
 executes. A synchronization boundary protects the reusable CPU staging buffer
-until GPU copies complete. Only the current GPU block is retained; the CPU
-staging buffer is released after each forward. OS file caching remains reclaimable by the OS.
+until GPU copies complete. Optional shared prefetch alternates two MPS-backed
+slots: one for current compute and one for CPU reads, without a staging copy.
+Both modes release weight storage after each forward. OS file caching remains
+reclaimable by the OS.
 """
 
 from concurrent.futures import ThreadPoolExecutor
@@ -89,7 +91,7 @@ class TensorReader:
       self._buffer = None
       self._reuse_buffer = False
 
-  def read_many(self, keys):
+  def read_many(self, keys, buffer=None):
     """Coalesce adjacent requested tensors, without reading gaps or other layers."""
     groups = []
     for key in sorted(keys, key=lambda k: (str(self.tensors[k][0]), self.tensors[k][1])):
@@ -102,12 +104,18 @@ class TensorReader:
       else:
         groups.append([path, offset, offset + size, spec["dtype"], [key]])
     result = {}
+    cursor = 0
     for path, start, end, _, names in groups:
       spec = self.tensors[names[0]][2]
       dtype = self._numpy_dtype(spec)
       size = (end - start) // dtype.itemsize
       array = None
-      if len(groups) == 1 and getattr(self, "_reuse_buffer", False):
+      if buffer is not None:
+        if dtype != buffer.dtype or cursor + size > buffer.size:
+          raise ValueError("Tensor group does not fit the shared staging buffer.")
+        array = buffer[cursor:cursor + size]
+        cursor += size
+      elif len(groups) == 1 and getattr(self, "_reuse_buffer", False):
         array = self._buffer
         if array is not None and (array.size != size or array.dtype != dtype):
           self._buffer = array = None
@@ -117,7 +125,7 @@ class TensorReader:
       reused = array is not None
       if array is None:
         array = np.empty(size, dtype=dtype)
-      if len(groups) == 1 and getattr(self, "_reuse_buffer", False):
+      if buffer is None and len(groups) == 1 and getattr(self, "_reuse_buffer", False):
         self._buffer = array
       view = memoryview(array).cast("B")
       with path.open("rb", buffering=0) as file:
@@ -245,7 +253,7 @@ class StreamingExtractor(HFExtractor):
 
   def __init__(self, model_path, hooks, device="cpu", torch_dtype="float32",
                attention_implementation="sdpa", compact_mlp=True, compact_attention=False,
-               fused_norm=True):
+               fused_norm=True, reuse_mps_cache=True, shared_prefetch=False):
     self.config = AutoConfig.from_pretrained(model_path, local_files_only=True)
     if self.config.model_type != "gemma2":
       raise ValueError("Streaming extraction supports Gemma-2 only.")
@@ -257,6 +265,13 @@ class StreamingExtractor(HFExtractor):
     # The measured fused kernel is the FP32 MPS path. Leave other backends
     # and precisions on their existing implementation.
     self.fused_norm = fused_norm and device == "mps" and torch_dtype == "float32"
+    self.reuse_mps_cache = (reuse_mps_cache and device == "mps"
+                           and torch_dtype == "float32")
+    self.shared_prefetch = (shared_prefetch and device == "mps"
+                            and torch_dtype == "float32")
+    if self.shared_prefetch and not callable(getattr(torch.mps, "_host_alias_storage", None)):
+      raise RuntimeError("Shared prefetch requires torch.mps._host_alias_storage.")
+    self._shared_gpu_slots = self._shared_cpu_slots = None
     self.tokenizer = AutoTokenizer.from_pretrained(model_path, local_files_only=True)
     if self.tokenizer.pad_token is None:
       self.tokenizer.pad_token = self.tokenizer.eos_token
@@ -293,7 +308,9 @@ class StreamingExtractor(HFExtractor):
     coalesced = (self.device == "mps" and self.dtype == torch.float32
                  and all(self.reader.tensors[key][2]["dtype"] == "F32" for key in keys))
     if coalesced:
-      state = {key[len(prefix):]: value for key, value in self.reader.read_many(keys).items()}
+      buffer = self._shared_cpu_slots[index % 2] if self.shared_prefetch else None
+      state = {key[len(prefix):]: value
+               for key, value in self.reader.read_many(keys, buffer=buffer).items()}
     else:
       state = {key[len(prefix):]: self.reader.read(key).to(self.dtype) for key in keys}
     layer.load_state_dict(state, strict=True, assign=True)
@@ -309,15 +326,57 @@ class StreamingExtractor(HFExtractor):
   def _weight_staging(self):
     with self.reader.staging(self.device == "mps" and self.dtype == torch.float32):
       try:
+        if self.shared_prefetch and self.stop_layer:
+          sizes = []
+          for index in range(self.stop_layer):
+            specs = [spec for key, (_, _, spec) in self.reader.tensors.items()
+                     if key.startswith(f"model.layers.{index}.")]
+            if not specs or any(spec["dtype"] != "F32" for spec in specs):
+              raise ValueError("Shared prefetch requires original FP32 block weights.")
+            sizes.append(sum(int(np.prod(spec["shape"])) for spec in specs))
+          size = max(sizes)
+          self._shared_gpu_slots = [torch.empty(size, dtype=torch.float32, device="mps")
+                                    for _ in range(2)]
+          # The CPU alias retains the same shared MTLBuffer. File reads write
+          # directly into that allocation; no checkpoint values are converted.
+          self._shared_cpu_slots = [torch.empty(0, dtype=torch.float32).set_(
+              torch.mps._host_alias_storage(slot.untyped_storage()),
+              0, (size,), (1,)).numpy() for slot in self._shared_gpu_slots]
+          self._sync()
         yield
       finally:
         # Drain queued copies on exceptions too, before releasing NumPy-backed
         # storage: its completion handlers may acquire the GIL.
         if self.device == "mps" and self.dtype == torch.float32:
           self._sync()
+          self._shared_cpu_slots = self._shared_gpu_slots = None
+          if self.reuse_mps_cache or self.shared_prefetch:
+            # Reuse freed allocations between blocks, still under the MPS
+            # allocator budget. Return unused memory after every forward,
+            # including failures, once prefetch and queued copies are drained.
+            self._release_cache()
 
   def _transfer_layer(self, layer):
-    if self.device == "mps" and self.dtype == torch.float32:
+    if self.shared_prefetch:
+      state, block_slot = {}, None
+      for name, value in layer.state_dict().items():
+        pointer = value.untyped_storage().data_ptr()
+        for index, array in enumerate(self._shared_cpu_slots):
+          start = array.__array_interface__["data"][0]
+          if start <= pointer < start + array.nbytes:
+            break
+        else:
+          raise RuntimeError("Block weight does not belong to a shared prefetch slot.")
+        if block_slot is not None and block_slot != index:
+          raise RuntimeError("Block weights span multiple prefetch slots.")
+        block_slot = index
+        # A sharded block has several NumPy views with different base pointers.
+        offset = (pointer - start) // value.element_size() + value.storage_offset()
+        state[name] = self._shared_gpu_slots[index].as_strided(
+            value.size(), value.stride(), offset)
+      layer.load_state_dict(state, strict=True, assign=True)
+      layer.requires_grad_(False)
+    elif self.device == "mps" and self.dtype == torch.float32:
       # Keep the original GPU parameter layout. Queue all parameter copies,
       # then let the caller's one block fence protect the CPU prefetch slot.
       layer.to(self.device, non_blocking=True)
@@ -388,6 +447,8 @@ class StreamingExtractor(HFExtractor):
                "batch_size": ids.shape[0], "sequence_length": ids.shape[1],
                "padding_side": self.tokenizer.padding_side,
                "fused_norm": self.fused_norm,
+               "reuse_mps_cache": self.reuse_mps_cache,
+               "shared_prefetch": self.shared_prefetch,
                "real_tokens": real_tokens,
                "padded_tokens": ids.numel(),
                "mlp_tokens": real_tokens if mlp_indices is not None else ids.numel(),
@@ -419,8 +480,8 @@ class StreamingExtractor(HFExtractor):
             layer.self_attn = _UnpaddedAttention(layer.self_attn, attention_spans)
           self._sync()
           transfer_seconds = time.perf_counter() - transfer_start
-          # The GPU copy is complete: the sole CPU staging buffer can now be
-          # overwritten by prefetch while this block computes on the GPU.
+          # Copy mode may overwrite its CPU buffer now. Shared mode reads into
+          # the other slot, whose previous GPU use finished at the compute fence.
           if index + 1 < self.stop_layer:
             future = pool.submit(self._load_layer, index + 1)
           compute_start = time.perf_counter()
@@ -437,7 +498,8 @@ class StreamingExtractor(HFExtractor):
                                                   torch.mps.driver_allocated_memory())
           release_start = time.perf_counter()
           del layer
-          self._release_cache()
+          if not self.reuse_mps_cache:
+            self._release_cache()
           release_seconds = time.perf_counter() - release_start
           profile["stages"].append({"layer": index, "load_seconds": load_seconds,
                                      "wait_seconds": wait_seconds,

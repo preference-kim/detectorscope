@@ -78,6 +78,8 @@ extern "C" int probe_install() {
       [counters addObject:@{@"set":set.name,@"counters":names}];
     }
     information=@{@"device":device.name,@"encoder_class":NSStringFromClass(cls),
+      @"dispatch_counter_sampling":@([device supportsCounterSampling:MTLCounterSamplingPointAtDispatchBoundary]),
+      @"stage_counter_sampling":@([device supportsCounterSampling:MTLCounterSamplingPointAtStageBoundary]),
       @"counter_sets":counters,@"max_threadgroup_memory":@(device.maxThreadgroupMemoryLength)};
     originalSetPipeline=replace(cls,@selector(setComputePipelineState:),reinterpret_cast<IMP>(setPipeline));
     originalGroups=replace(cls,@selector(dispatchThreadgroups:threadsPerThreadgroup:),reinterpret_cast<IMP>(groups));

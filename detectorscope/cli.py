@@ -4,6 +4,7 @@ import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import math
+import os
 from pathlib import Path
 import sys
 import time
@@ -26,6 +27,9 @@ def main():
   serve.add_argument("--batch-size", type=int, default=1,
                      help="Maximum chunks per forward; weights are shared across chunks")
   serve.add_argument("--cache-size", type=int, default=128)
+  serve.add_argument("--shared-prefetch", action="store_true",
+                     help="Read FP32 weights into shared MPS storage; requires "
+                          "PyTorch host-alias support")
   serve.add_argument("--memory-limit-gib", type=float,
                      default=3.0 if sys.platform == "darwin" else 0.0,
                      help="macOS whole-worker footprint budget in GiB; "
@@ -66,6 +70,11 @@ def main():
 
 
 def _serve(args, memory):
+  if (args.shared_prefetch and sys.platform == "darwin"
+      and args.device in ("auto", "mps") and args.dtype == "float32"):
+    # Configure reclamation before importing Torch. Keep the existing 2 GiB
+    # allocator ceiling and preserve an explicitly configured environment.
+    os.environ.setdefault("PYTORCH_MPS_LOW_WATERMARK_RATIO", "0.05")
   from detectorscope.documents import DocumentAnalyzer
   from detectorscope.inference import DEFAULT_MODEL, DEFAULT_REVISION, OptimizedDetector
 
@@ -74,6 +83,7 @@ def _serve(args, memory):
       args.model or DEFAULT_MODEL, revision=args.revision or DEFAULT_REVISION,
       device=args.device,
       torch_dtype=args.dtype, local_files_only=args.local_files_only,
+      shared_prefetch=args.shared_prefetch,
   )
   analyzer = DocumentAnalyzer(detector, args.max_tokens, args.cache_size,
                               args.batch_size)

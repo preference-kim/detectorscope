@@ -11,6 +11,7 @@ import hashlib
 import importlib.util
 import inspect
 import json
+import os
 from pathlib import Path
 import random
 import resource
@@ -46,7 +47,7 @@ def disk_read_bytes():
   return usage.diskread
 
 
-def run(args):
+def run(args, memory):
   import time
   import torch
   from benchmark_mac import cases, serialize, sync
@@ -59,19 +60,24 @@ def run(args):
   module = importlib.util.module_from_spec(spec)
   spec.loader.exec_module(module)
   inference.StreamingExtractor = module.StreamingExtractor
-  if "fused_norm" not in inspect.signature(module.StreamingExtractor).parameters:
-    # Current factory metadata also describes snapshots predating this option.
-    # Keep their implementation intact and explicitly mark it unfused.
+  missing_options = {name for name in ("fused_norm", "reuse_mps_cache", "shared_prefetch")
+                     if name not in inspect.signature(module.StreamingExtractor).parameters}
+  if missing_options:
+    # Keep older snapshots intact and report unsupported optimizations as off.
     class PreviousExtractor(module.StreamingExtractor):
-      def __init__(self, *args, fused_norm=False, **kwargs):
+      def __init__(self, *args, **kwargs):
+        for name in missing_options:
+          kwargs.pop(name, None)
         super().__init__(*args, **kwargs)
-        self.fused_norm = False
+        for name in missing_options:
+          setattr(self, name, False)
     inference.StreamingExtractor = PreviousExtractor
   def forbidden(*a, **kw):
     raise AssertionError("Full-model loading is forbidden")
   inference.AuditableDetector.from_pretrained = forbidden
   detector = inference.OptimizedDetector.from_pretrained(
-      device=args.device, torch_dtype="float32", local_files_only=True)
+      device=args.device, torch_dtype="float32", local_files_only=True,
+      shared_prefetch=args.shared_prefetch and args.variant == "production")
   fixtures = profiling_cases(detector.extractor.tokenizer)
   short = next(s["text"] for s in cases(detector.extractor.tokenizer)[0]
                if s["id"] == "gpt-4o-256")
@@ -82,6 +88,7 @@ def run(args):
   data = {"variant": args.variant, "round": args.round, "device": args.device,
           "dtype": "float32", "cpu_threads": 8, "model": detector.identity,
           "started_utc": datetime.now(timezone.utc).isoformat(),
+          "mps_low_watermark_ratio": os.environ.get("PYTORCH_MPS_LOW_WATERMARK_RATIO"),
           "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
           "inference_sha256": hashlib.sha256((ROOT / "detectorscope/inference.py").read_bytes()).hexdigest(),
           "sample_tokens": {k: [len(detector.extractor.tokenizer.encode(t)) for t in ts]
@@ -121,6 +128,7 @@ def run(args):
           detector(texts, batch_size=len(texts), return_highlights=True)]
     data["status"] = "complete"
   finally:
+    data["memory"] = memory.status()
     data["peak_process_rss_gib"] = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 2**30
     data["max_driver_gib"] = max((r["profile"]["max_mps_driver_bytes"] / 2**30
                                   for r in data["rows"]), default=0)
@@ -197,7 +205,9 @@ def summarize(output, score_atol=0.0, highlight_atol=0.0):
     selected = [r for r in runs if r["variant"] == variant]
     summary["memory"][variant] = {
         "max_run_peak_process_rss_gib": max(r["peak_process_rss_gib"] for r in selected),
-        "observed_driver_max_gib": max(r["max_driver_gib"] for r in selected)}
+        "observed_driver_max_gib": max(r["max_driver_gib"] for r in selected),
+        "max_process_footprint_gib": max((r["memory"]["peak_footprint_bytes"] / 2**30
+            for r in selected if r.get("memory", {}).get("enabled")), default=None)}
   save(output / "summary.json", summary)
   return summary
 
@@ -214,13 +224,20 @@ def main():
   parser.add_argument("--round", type=int, default=0)
   parser.add_argument("--score-atol", type=float, default=0.0)
   parser.add_argument("--highlight-atol", type=float, default=0.0)
+  parser.add_argument("--shared-prefetch", action="store_true")
+  parser.add_argument("--memory-limit-gib", type=float,
+                      default=3.0 if sys.platform == "darwin" else 0.0)
   parser.add_argument("--cases", nargs="+", default=["single_256", "single_1024", "mixed_1024_420", "equal_1024"])
   args = parser.parse_args()
   if args.score_atol < 0 or args.highlight_atol < 0:
     raise ValueError("Output tolerances must be nonnegative")
   args.output = args.output.resolve()
   if args.command == "run":
-    run(args)
+    if args.shared_prefetch and args.variant == "production" and args.device == "mps":
+      os.environ.setdefault("PYTORCH_MPS_LOW_WATERMARK_RATIO", "0.05")
+    from detectorscope.memory import MemoryWatchdog
+    with MemoryWatchdog(args.memory_limit_gib) as memory:
+      run(args, memory)
     return
   if args.command == "suite":
     if args.repeats < 1 or args.rounds < 1:
@@ -235,7 +252,10 @@ def main():
         print(json.dumps({"round": round_id, "variant": variant, "device": args.device}), flush=True)
         command = [sys.executable, str(Path(__file__)), "run", "--output", str(args.output),
                    "--device", args.device, "--variant", variant, "--round", str(round_id),
+                   "--memory-limit-gib", str(args.memory_limit_gib),
                    "--repeats", str(args.repeats), "--cases", *args.cases]
+        if args.shared_prefetch:
+          command.append("--shared-prefetch")
         with (args.output / f"round{round_id}-{variant}.log").open("w") as log:
           subprocess.run(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT, check=True)
   print(json.dumps(summarize(args.output, args.score_atol, args.highlight_atol), indent=2))

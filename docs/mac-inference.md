@@ -1,6 +1,6 @@
 # About this fork
 
-**Status: 2026-10-30 KST.**
+**Status: 2026-10-31 KST.**
 
 ## Why this fork exists
 
@@ -42,7 +42,7 @@ Model revision: `9baaff9e2d1cdb79cafa90cdb27811b847e69dae`. Parameter counts, dt
 | OS | macOS 26.6.2 |
 | Runtime | Python 3.13; PyTorch 2.14.1; Transformers 4.57.6 |
 | Benchmark CPU threads | 8 compute threads; one weight-prefetch thread in streamed runs |
-| Current worker | **MPS FP32, maximum batch 2**, chunk limit 1,024 tokens |
+| Current worker | **MPS FP32, maximum batch 2**, chunk limit 1,024 tokens, shared prefetch enabled |
 | GPU allocation budget | **2 GiB MPS allocator limit**; not a process-wide RAM cap |
 | Whole-worker budget | **3 GiB macOS memory footprint watchdog**, including CPU and Metal memory |
 
@@ -53,7 +53,7 @@ loading PyTorch or the checkpoint. The default is 3 GiB, configurable with
 `--memory-limit-gib`:
 
 ```sh
-detectorscope serve --device mps --dtype float32 --batch-size 2 --memory-limit-gib 3
+detectorscope serve --device mps --dtype float32 --batch-size 2 --memory-limit-gib 3 --shared-prefetch
 ```
 
 It uses macOS `phys_footprint`, which includes CPU and Metal allocations plus
@@ -95,6 +95,15 @@ The new FP32 normalization change reduced long-batch compute by about **5%** in 
 
 [Grid numbers](assets/mac-benchmark-grid.csv) · [Latest prefetch comparison](assets/mac-prefetch-comparison.csv)
 
+The latest change adds `--shared-prefetch`: CPU reads fill shared MPS buffers
+directly, avoiding a separate weight copy. Together with cache reuse between
+blocks, this reduced P50 by **13–22%** in a fresh-process comparison against
+`44302d8`. Two full windows went from **2.554 to 2.213 s**; one 1024-token window
+went from **2.228 to 1.749 s**. Scores and highlights matched exactly, and maximum
+process footprint fell from **2.000 to 1.715 GiB**. These results cover four
+fixtures with eight timed calls each. [Kernel investigation, measurements and
+reproduction](mac-memory-reuse.md).
+
 ### Historical CPU reference
 
 The opening comparison uses a full-model CPU run from Oct 28: FP32, BS=1, 256–1024 tokens, three timed calls per input after warmup. It is **not a verified unmodified-upstream baseline**.
@@ -103,10 +112,18 @@ The opening comparison uses a full-model CPU run from Oct 28: FP32, BS=1, 256–
 
 Weights move from storage through CPU to MPS one block at a time: **one GPU compute block and one CPU prefetch slot**. CPU execution keeps only the current and next blocks. Adjacent reads share a reusable CPU buffer on MPS, and parameter copies are queued before a block-level wait. The buffer is reused only after those copies finish.
 
-We also skip unused model/SAE work, reduce FFN work on padded batches and use PyTorch's fused RMSNorm on MPS FP32. Original FP32 weights and the **2 GiB MPS allocator limit** stay in place, with the Mac worker's **3 GiB process footprint watchdog** covering CPU memory too.
+We also skip unused model/SAE work, reduce FFN work on padded batches and use PyTorch's fused RMSNorm on MPS FP32. Freed MPS allocations can be reused between blocks, with unused cache returned after each forward. Original FP32 weights and the **2 GiB MPS allocator limit** stay in place, with the Mac worker's **3 GiB process footprint watchdog** covering CPU memory too.
+
+The optional shared path uses two MPS-backed weight buffers with the same
+current-block and CPU-prefetch roles. It synchronizes before reusing a slot and
+before GPU consumption, then releases both slots after the forward. The CLI
+sets a lower reclamation threshold (`PYTORCH_MPS_LOW_WATERMARK_RATIO=0.05`) before
+Torch loads, preserving an explicit environment override. The allocation caps
+stay unchanged. This path requires PyTorch's private host-alias API, tested on
+2.14.1; omit `--shared-prefetch` to keep the ordinary copy path.
 
 ## TODO
 
-- Find the current MPS bottleneck, including storage/pipeline prefetch and FFN/attention costs.
+- Improve the remaining FP32 FFN matrix products and exposed weight reads.
 - Check attention softcapping semantics and try more representative workloads.
 - Explore low precision later. **Current development and everyday use stay on the original FP32 model.**
