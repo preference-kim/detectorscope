@@ -3,6 +3,7 @@
 import argparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import math
 from pathlib import Path
 import sys
 import time
@@ -25,6 +26,11 @@ def main():
   serve.add_argument("--batch-size", type=int, default=1,
                      help="Maximum chunks per forward; weights are shared across chunks")
   serve.add_argument("--cache-size", type=int, default=128)
+  serve.add_argument("--memory-limit-gib", type=float,
+                     default=3.0 if sys.platform == "darwin" else 0.0,
+                     help="macOS whole-worker footprint budget in GiB; "
+                          "terminates the worker after a breach "
+                          "(default: 3 on macOS; 0 disables)")
   check = sub.add_parser("check", help="Check UTF-8 text via the running worker")
   check.add_argument("file", help="UTF-8 text/Markdown file, or - for stdin")
   check.add_argument("--port", type=int, default=8766)
@@ -47,6 +53,19 @@ def main():
       parser.exit(1, f"Worker unavailable: {e}. Start detectorscope serve.\n")
     return
 
+  if not math.isfinite(args.memory_limit_gib) or args.memory_limit_gib < 0:
+    parser.error("--memory-limit-gib must be finite and nonnegative")
+  if args.memory_limit_gib and sys.platform != "darwin":
+    parser.error("--memory-limit-gib requires macOS")
+  from detectorscope.memory import MemoryWatchdog
+
+  # Start monitoring before imports, checkpoint loading and warmup as well as
+  # requests, cached results and idle time. Keep the existing MPS budget too.
+  with MemoryWatchdog(args.memory_limit_gib) as memory:
+    _serve(args, memory)
+
+
+def _serve(args, memory):
   from detectorscope.documents import DocumentAnalyzer
   from detectorscope.inference import DEFAULT_MODEL, DEFAULT_REVISION, OptimizedDetector
 
@@ -74,15 +93,22 @@ def main():
       if self.path != "/health":
         self.reply(404, {"error": "Not found"})
         return
+      try:
+        memory_status = memory.status()
+      except (OSError, RuntimeError) as error:
+        self.reply(503, {"ready": False, "error": str(error)})
+        return
       self.reply(200, {"ready": True, "model": detector.identity,
                        "max_batch_size": analyzer.batch_size,
-                       "max_tokens": analyzer.max_tokens})
+                       "max_tokens": analyzer.max_tokens,
+                       "memory": memory_status})
 
     def do_POST(self):
       if self.path != "/analyze":
         self.reply(404, {"error": "Not found"})
         return
       try:
+        memory.status()  # Refuse inference if the watchdog unexpectedly died.
         size = int(self.headers.get("Content-Length", "0"))
         if not 0 < size <= 2 * 1024 * 1024:
           self.reply(413, {"error": "Request must be at most 2 MiB."})
@@ -104,7 +130,8 @@ def main():
   server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
   print(json.dumps({"ready": True, "port": args.port,
                     "startup_seconds": time.perf_counter() - started,
-                    "model": detector.identity}), flush=True)
+                    "model": detector.identity,
+                    "memory": memory.status()}), flush=True)
   try:
     server.serve_forever()
   except KeyboardInterrupt:

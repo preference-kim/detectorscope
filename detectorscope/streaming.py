@@ -267,8 +267,8 @@ class StreamingExtractor(HFExtractor):
     self.reader = TensorReader(model_path)
     self.device = device
     if device == "mps":
-      # This process owns one inference worker. Bound allocator growth as well
-      # as live weights; exceeding the budget fails instead of causing swap.
+      # Bound MPS allocator growth as well as live weights. The CLI also
+      # watches the whole process footprint, including CPU-side allocations.
       torch.mps.set_per_process_memory_fraction(
           min(1.0, 2 * 2**30 / torch.mps.recommended_max_memory())
       )

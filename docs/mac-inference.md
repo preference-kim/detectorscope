@@ -44,6 +44,36 @@ Model revision: `9baaff9e2d1cdb79cafa90cdb27811b847e69dae`. Parameter counts, dt
 | Benchmark CPU threads | 8 compute threads; one weight-prefetch thread in streamed runs |
 | Current worker | **MPS FP32, maximum batch 2**, chunk limit 1,024 tokens |
 | GPU allocation budget | **2 GiB MPS allocator limit**; not a process-wide RAM cap |
+| Whole-worker budget | **3 GiB macOS memory footprint watchdog**, including CPU and Metal memory |
+
+## Worker memory budget
+
+On macOS, `detectorscope serve` now starts a separate memory watchdog before
+loading PyTorch or the checkpoint. The default is 3 GiB, configurable with
+`--memory-limit-gib`:
+
+```sh
+detectorscope serve --device mps --dtype float32 --batch-size 2 --memory-limit-gib 3
+```
+
+It uses macOS `phys_footprint`, which includes CPU and Metal allocations plus
+compressed/swapped memory charged to the worker. It covers tokenization,
+prefetch, inference, highlights and the result cache. Clean file-cache pages
+are reclaimable and are excluded by this metric; RSS and MPS driver memory
+must not be added to it. [Apple's explanation of memory footprint](https://developer.apple.com/videos/play/wwdc2022/10106/).
+
+The watchdog checks every 50 ms and uses the kernel's lifetime peak to catch
+spikes between samples. If the peak exceeds the budget, it logs the measured
+value and terminates the worker. An in-flight request may disconnect, and the
+worker needs restarting. **This is a stop-on-breach guard, not an OS allocation
+barrier:** scheduling and polling allow temporary overshoot. The small,
+stdlib-only watchdog process has its own memory outside the worker's budget.
+
+`GET /health` reports the limit, current footprint and lifetime peak in bytes.
+The existing 2 GiB MPS allocator limit and one-block/one-prefetch policy still
+apply. The new watchdog is enabled for the Mac CLI worker; direct Python model
+calls do not start it automatically. `--memory-limit-gib 0` explicitly disables
+it, and non-Mac workers leave it disabled by default.
 
 ## Performance
 
@@ -73,7 +103,7 @@ The opening comparison uses a full-model CPU run from Oct 28: FP32, BS=1, 256–
 
 Weights move from storage through CPU to MPS one block at a time: **one GPU compute block and one CPU prefetch slot**. CPU execution keeps only the current and next blocks. Adjacent reads share a reusable CPU buffer on MPS, and parameter copies are queued before a block-level wait. The buffer is reused only after those copies finish.
 
-We also skip unused model/SAE work, reduce FFN work on padded batches and use PyTorch's fused RMSNorm on MPS FP32. Original FP32 weights and the **2 GiB MPS allocator limit** stay in place; that limit does not cover all process RAM.
+We also skip unused model/SAE work, reduce FFN work on padded batches and use PyTorch's fused RMSNorm on MPS FP32. Original FP32 weights and the **2 GiB MPS allocator limit** stay in place, with the Mac worker's **3 GiB process footprint watchdog** covering CPU memory too.
 
 ## TODO
 
